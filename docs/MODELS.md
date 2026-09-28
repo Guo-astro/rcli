@@ -5,8 +5,8 @@
 This table groups models by publisher; the id you pull depends on the engine
 you want:
 
-- `wally models pull <id>` — the llama.cpp / GGUF build (macOS, Windows x64, Linux).
-- `wally models pull mlx-<id>` — the MLX build (Apple Silicon only).
+- `wally models pull <id>`: the llama.cpp / GGUF build (macOS, Windows x64, Linux).
+- `wally models pull mlx-<id>`: the MLX build (Apple Silicon only).
 
 MLX builds exist on Apple Silicon only; on any other platform they are hidden
 from the catalog. The short aliases (`qwen3`, `llama3.2`, `smollm2`, …) still
@@ -15,7 +15,7 @@ resolve.
 There are no Apple Neural Engine (`ane-<id>`) rows in this release. The NeuRT
 engine that runs them is a private overlay, not in the public kit, and the
 published Core ML repos hold directory trees rather than a downloadable
-archive. The rows are commented out in `src/catalog/catalog.cpp` under
+archive. The rows are commented out in `src/catalog/catalog.rs` under
 `TEMP(ane-cut)` and come back together with real artifacts.
 
 ### Language
