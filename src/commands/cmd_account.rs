@@ -214,7 +214,17 @@ fn refresh_session(client: &ConsoleClient, credentials: &mut Credentials) -> Res
     }
     let grant = client
         .refresh(&credentials.console_url, &credentials.refresh_token)
-        .map_err(|e| e.message)?;
+        .map_err(|e| {
+            if e.card_required {
+                format!(
+                    "{}; add one at {}",
+                    e.message,
+                    account::console_billing_url(&credentials.console_url)
+                )
+            } else {
+                e.message
+            }
+        })?;
     apply_grant(&grant, credentials);
     account::save(credentials)
 }
@@ -269,8 +279,16 @@ fn login(requested_console: &str, open: bool) -> i32 {
     if open {
         open_browser(&approval_url);
     }
-    out::status_line("waiting for approval");
+    // The poll below cannot tell whether this account needs a card: the
+    // console refuses at the approval page, not on the poll, and the page
+    // tells the person there. Naming the billing page here as well means the
+    // terminal says something useful even if that page goes unread.
+    let billing_url = account::console_billing_url(&console_url);
+    out::status_line(&format!(
+        "waiting for approval — add a card at {billing_url} if asked"
+    ));
 
+    let mut card_required_shown = false;
     let deadline = Instant::now() + Duration::from_secs(authorization.expires_in.max(0) as u64);
     loop {
         if Instant::now() >= deadline {
@@ -278,14 +296,27 @@ fn login(requested_console: &str, open: bool) -> i32 {
         }
         let outcome = client.poll(&console_url, &authorization);
         match outcome.result {
-            PollResult::Pending => {
+            // A card_required poll keeps waiting like a pending one. The
+            // console does not send it on this endpoint today (it refuses at
+            // the approval page and on refresh), but if it ever does, the
+            // person may already be adding the card in the browser, and the
+            // approval page promises that this terminal keeps waiting.
+            PollResult::Pending | PollResult::CardRequired => {
+                if outcome.result == PollResult::CardRequired {
+                    if !card_required_shown {
+                        card_required_shown = true;
+                        out::status_line(&format!(
+                            "account needs a card on file — add one at {billing_url}; still waiting"
+                        ));
+                    }
+                } else if !outcome.error.is_empty() && outcome.retry_after <= authorization.interval
+                {
+                    out::status_line("server busy, retrying");
+                }
                 // A console that asked for a delay gets it. Polling at the
                 // authorization's own interval through a 30-second backoff is
                 // just refusing to hear the answer (#90). The grant's expiry
                 // still bounds the wait, so this cannot outlive the login.
-                if !outcome.error.is_empty() && outcome.retry_after <= authorization.interval {
-                    out::status_line("server busy, retrying");
-                }
                 let delay =
                     account::next_poll_delay_seconds(authorization.interval, outcome.retry_after);
                 let wait = Duration::from_secs(delay.max(0) as u64);
@@ -490,7 +521,10 @@ pub fn register_account(app: &mut App) {
 
 #[cfg(all(test, not(windows)))]
 mod tests {
-    use super::{open_browser, rebase_approval_url};
+    use std::sync::Arc;
+
+    use super::{open_browser, rebase_approval_url, refresh_session};
+    use crate::account::{ConsoleClient, Credentials, HttpRequest, HttpResponse, Transport};
     use crate::util::env_lock::lock as env_lock;
 
     // C++'s OpenBrowser only prints the fallback line when fork() itself
@@ -591,5 +625,63 @@ mod tests {
         }
 
         assert_eq!(result, "https://console.runanywhere.ai?code=abc");
+    }
+
+    // #137: refresh_session must not string-match the console's message to
+    // find a billing link -- it reads RefreshError::card_required (a typed
+    // field) and appends console_billing_url itself.
+    #[test]
+    fn refresh_session_appends_the_billing_url_on_card_required() {
+        let _lock = env_lock();
+        // The billing origin also honours the legacy RCLI_ name, so both are
+        // cleared for the default to be what is tested.
+        let names = ["WALLY_CONSOLE_WEB_URL", "RCLI_CONSOLE_WEB_URL"];
+        let saved: Vec<_> = names.iter().map(std::env::var_os).collect();
+        for name in names {
+            // SAFETY: `_lock` serializes every test in this process that
+            // touches these variables.
+            unsafe { std::env::remove_var(name) };
+        }
+
+        let client = ConsoleClient::new(Some(Arc::new(
+            |_: &HttpRequest| -> Result<HttpResponse, String> {
+                Ok(HttpResponse {
+                    status: 403,
+                    body: serde_json::json!({
+                        "code": "card_required",
+                        "message": "Add a card to sign in from the terminal.",
+                    })
+                    .to_string(),
+                    ..Default::default()
+                })
+            },
+        ) as Transport));
+        let mut credentials = Credentials {
+            console_url: "https://inference.runanywhere.ai".to_string(),
+            refresh_token: "refresh-token".to_string(),
+            ..Credentials::default()
+        };
+
+        let failure =
+            refresh_session(&client, &mut credentials).expect_err("card_required must fail");
+
+        for (name, value) in names.iter().zip(saved) {
+            match value {
+                // SAFETY: still under `_lock`.
+                Some(value) => unsafe { std::env::set_var(name, value) },
+                None => unsafe { std::env::remove_var(name) },
+            }
+        }
+
+        assert!(
+            failure.starts_with(
+                "Wally Cloud refused the refresh: Add a card to sign in from the terminal."
+            ),
+            "the console's own message must still lead: {failure}"
+        );
+        assert!(
+            failure.contains("https://console.runanywhere.ai/cloud/billing"),
+            "the refresh failure must name the billing URL: {failure}"
+        );
     }
 }
