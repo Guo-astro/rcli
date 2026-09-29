@@ -610,6 +610,15 @@ fn on_path(tool: &str) -> bool {
 /// `/usr`, a Homebrew prefix, `~/.npm-global`, an nvm path) rather than only the
 /// few guesses below. None when npm is absent, which is fine: nothing to find.
 fn npm_global_bin() -> Option<PathBuf> {
+    // npm on Windows is the `npm.cmd` shim, which `Command::new("npm")` does not
+    // resolve (the same reason the installer table shells out to `npm.cmd`
+    // there); run it through cmd.exe. POSIX invokes npm directly.
+    #[cfg(windows)]
+    let output = std::process::Command::new("cmd.exe")
+        .args(["/c", "npm.cmd", "prefix", "-g"])
+        .output()
+        .ok()?;
+    #[cfg(not(windows))]
     let output = std::process::Command::new("npm")
         .args(["prefix", "-g"])
         .output()
@@ -806,9 +815,15 @@ fn offer_install(tool: &str) -> InstallOffer {
             "{tool} installs with npm, which comes with Node.js. Two steps:"
         ));
         out::status_line("  1. install Node.js from https://nodejs.org (it includes npm)");
-        out::status_line(&format!(
-            "  2. run this again and wally installs {tool} for you"
-        ));
+        // A re-run only installs the tool for a person at the terminal; a pipe
+        // or CI would fall through to the hint anyway, so tell it the command.
+        if term::stdin_is_tty() && term::stderr_is_tty() {
+            out::status_line(&format!(
+                "  2. run this again and wally installs {tool} for you"
+            ));
+        } else {
+            out::status_line(&format!("  2. then run `{}`", installer.command));
+        }
         return InstallOffer::Guided;
     }
     if !term::stdin_is_tty() || !term::stderr_is_tty() {
