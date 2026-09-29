@@ -605,6 +605,33 @@ fn on_path(tool: &str) -> bool {
     false
 }
 
+/// npm's real global bin, straight from `npm prefix -g`, so we find a tool it
+/// just installed wherever npm is actually configured to put it (a NodeSource
+/// `/usr`, a Homebrew prefix, `~/.npm-global`, an nvm path) rather than only the
+/// few guesses below. None when npm is absent, which is fine: nothing to find.
+fn npm_global_bin() -> Option<PathBuf> {
+    let output = std::process::Command::new("npm")
+        .args(["prefix", "-g"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let prefix = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if prefix.is_empty() {
+        return None;
+    }
+    // npm drops CLI shims in <prefix> on Windows and <prefix>/bin elsewhere.
+    #[cfg(windows)]
+    {
+        Some(PathBuf::from(prefix))
+    }
+    #[cfg(not(windows))]
+    {
+        Some(Path::new(&prefix).join("bin"))
+    }
+}
+
 /// Per-user install locations a fresh harness install lands in before the
 /// shell has picked it up on PATH: npm's global bin, the native installers'
 /// own bin, and on Windows the AppData npm shims. Probed so a just-installed
@@ -613,6 +640,9 @@ fn on_path(tool: &str) -> bool {
 #[cfg(windows)]
 fn common_install_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
+    if let Some(bin) = npm_global_bin() {
+        dirs.push(bin);
+    }
     if let Ok(appdata) = std::env::var("APPDATA") {
         if !appdata.is_empty() {
             dirs.push(Path::new(&appdata).join("npm"));
@@ -635,6 +665,9 @@ fn common_install_dirs() -> Vec<PathBuf> {
 #[cfg(not(windows))]
 fn common_install_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
+    if let Some(bin) = npm_global_bin() {
+        dirs.push(bin);
+    }
     if let Ok(home) = std::env::var("HOME") {
         if !home.is_empty() {
             dirs.push(Path::new(&home).join(".local").join("bin"));
