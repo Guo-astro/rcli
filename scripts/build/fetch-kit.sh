@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Download and verify a pinned C++ desktop kit, then extract it to DEST.
 #
-#   scripts/fetch-kit.sh <macos-arm64|windows-x64|windows-arm64> <dest-dir>
+#   scripts/fetch-kit.sh <macos-arm64|linux-x64|linux-arm64|windows-x64|windows-arm64> <dest-dir>
 #
 # Requires: gh, and either shasum or sha256sum.
 # Pins live in versions.toml (the single source; cmake/sdk-pin.cmake reads the
@@ -12,8 +12,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # shellcheck source=scripts/lib/common.sh
 source "${ROOT}/scripts/lib/common.sh"
-PLATFORM="${1:?usage: fetch-kit.sh <macos-arm64|windows-x64|windows-arm64> <dest>}"
-DEST="${2:?usage: fetch-kit.sh <macos-arm64|windows-x64|windows-arm64> <dest>}"
+PLATFORM="${1:?usage: fetch-kit.sh <macos-arm64|linux-x64|linux-arm64|windows-x64|windows-arm64> <dest>}"
+DEST="${2:?usage: fetch-kit.sh <macos-arm64|linux-x64|linux-arm64|windows-x64|windows-arm64> <dest>}"
 PIN="${ROOT}/versions.toml"
 
 PINNED_SDK="$(wally_kit_version)"

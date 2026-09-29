@@ -605,6 +605,42 @@ fn on_path(tool: &str) -> bool {
     false
 }
 
+/// npm's real global bin, straight from `npm prefix -g`, so we find a tool it
+/// just installed wherever npm is actually configured to put it (a NodeSource
+/// `/usr`, a Homebrew prefix, `~/.npm-global`, an nvm path) rather than only the
+/// few guesses below. None when npm is absent, which is fine: nothing to find.
+fn npm_global_bin() -> Option<PathBuf> {
+    // npm on Windows is the `npm.cmd` shim, which `Command::new("npm")` does not
+    // resolve (the same reason the installer table shells out to `npm.cmd`
+    // there); run it through cmd.exe. POSIX invokes npm directly.
+    #[cfg(windows)]
+    let output = std::process::Command::new("cmd.exe")
+        .args(["/c", "npm.cmd", "prefix", "-g"])
+        .output()
+        .ok()?;
+    #[cfg(not(windows))]
+    let output = std::process::Command::new("npm")
+        .args(["prefix", "-g"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let prefix = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if prefix.is_empty() {
+        return None;
+    }
+    // npm drops CLI shims in <prefix> on Windows and <prefix>/bin elsewhere.
+    #[cfg(windows)]
+    {
+        Some(PathBuf::from(prefix))
+    }
+    #[cfg(not(windows))]
+    {
+        Some(Path::new(&prefix).join("bin"))
+    }
+}
+
 /// Per-user install locations a fresh harness install lands in before the
 /// shell has picked it up on PATH: npm's global bin, the native installers'
 /// own bin, and on Windows the AppData npm shims. Probed so a just-installed
@@ -613,6 +649,9 @@ fn on_path(tool: &str) -> bool {
 #[cfg(windows)]
 fn common_install_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
+    if let Some(bin) = npm_global_bin() {
+        dirs.push(bin);
+    }
     if let Ok(appdata) = std::env::var("APPDATA") {
         if !appdata.is_empty() {
             dirs.push(Path::new(&appdata).join("npm"));
@@ -635,6 +674,9 @@ fn common_install_dirs() -> Vec<PathBuf> {
 #[cfg(not(windows))]
 fn common_install_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
+    if let Some(bin) = npm_global_bin() {
+        dirs.push(bin);
+    }
     if let Ok(home) = std::env::var("HOME") {
         if !home.is_empty() {
             dirs.push(Path::new(&home).join(".local").join("bin"));
@@ -753,6 +795,9 @@ enum InstallOffer {
     Installed,
     /// Failed, or installed somewhere not yet on PATH; already reported.
     Stopped,
+    /// The full next-steps were already printed (e.g. install Node first), so
+    /// the caller must not also append the one-line hint.
+    Guided,
 }
 
 /// Offers to run the tool's installer, but only to a person at the terminal:
@@ -761,11 +806,27 @@ fn offer_install(tool: &str) -> InstallOffer {
     let Some(installer) = installer(tool) else {
         return InstallOffer::NotOffered;
     };
-    if !term::stdin_is_tty() || !term::stderr_is_tty() {
-        return InstallOffer::NotOffered;
-    }
+    // An npm tool with no npm on PATH: there is no command we can offer to run,
+    // so spell out the order instead of a single vague line. Node.js is the
+    // prerequisite (it brings npm); once it is there, a re-run installs the tool
+    // itself. Shown whether or not we could prompt, since it is the real fix.
     if installer.needs_npm && !on_path("npm") {
-        out::status_line("it installs with npm, which comes with Node.js: https://nodejs.org");
+        out::status_line(&format!(
+            "{tool} installs with npm, which comes with Node.js. Two steps:"
+        ));
+        out::status_line("  1. install Node.js from https://nodejs.org (it includes npm)");
+        // A re-run only installs the tool for a person at the terminal; a pipe
+        // or CI would fall through to the hint anyway, so tell it the command.
+        if term::stdin_is_tty() && term::stderr_is_tty() {
+            out::status_line(&format!(
+                "  2. run this again and wally installs {tool} for you"
+            ));
+        } else {
+            out::status_line(&format!("  2. then run `{}`", installer.command));
+        }
+        return InstallOffer::Guided;
+    }
+    if !term::stdin_is_tty() || !term::stderr_is_tty() {
         return InstallOffer::NotOffered;
     }
     if !confirm(&format!(
@@ -810,6 +871,7 @@ pub fn ensure_installed(tool: &str) -> bool {
     match offer_install(tool) {
         InstallOffer::Installed => true,
         InstallOffer::Stopped => false,
+        InstallOffer::Guided => false,
         InstallOffer::NotOffered => {
             out::status_line(&install_hint(tool));
             false
