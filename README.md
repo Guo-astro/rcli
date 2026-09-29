@@ -1,4 +1,6 @@
-<img src="docs/assets/wally.gif" alt="Wally, the RunAnywhere mascot" width="120">
+<p align="center">
+  <img src="docs/assets/wally.gif" alt="Wally, the RunAnywhere mascot" width="120">
+</p>
 
 # Wally
 
