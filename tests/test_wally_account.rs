@@ -815,6 +815,113 @@ fn a_rate_limited_poll_reports_the_backoff() {
     );
 }
 
+// #137: when the account requires a card, the console answers 403 card_required.
+// The CLI reports PollResult::CardRequired so login can show the billing link.
+#[test]
+fn a_poll_requiring_a_card_reports_card_required() {
+    let client = ConsoleClient::new(Some(Arc::new(
+        |_: &HttpRequest| -> Result<HttpResponse, String> {
+            Ok(HttpResponse {
+                status: 403,
+                body: json(serde_json::json!({
+                    "code": "card_required",
+                    "message": "Add a card to sign in from the terminal. A CLI login creates an API key, and keys need a card on file.",
+                })),
+                ..Default::default()
+            })
+        },
+    ) as Transport));
+    let authorization = Authorization {
+        request_code: "ABCD-EFGH".to_string(),
+        poll_secret: "poll-secret".to_string(),
+        ..Authorization::default()
+    };
+    let outcome = client.poll("https://console.runanywhere.ai", &authorization);
+    assert_eq!(
+        outcome.result,
+        PollResult::CardRequired,
+        "a card_required error must report PollResult::CardRequired"
+    );
+    assert_eq!(
+        outcome.error,
+        "Wally Cloud refused the poll: Add a card to sign in from the terminal. A CLI login creates an API key, and keys need a card on file."
+    );
+}
+
+// #137: a refresh (not just a poll) can also come back card_required -- it is
+// the one console endpoint that sends it today. refresh_session
+// (cmd_account.rs) turns this into a message with the billing URL; this pins
+// the typed signal it reads to build that message.
+#[test]
+fn a_refresh_requiring_a_card_reports_card_required() {
+    let _lock = env_lock();
+    let mut env = EnvGuard::new();
+    env.unset("WALLY_CONSOLE_WEB_URL");
+    env.unset("RCLI_CONSOLE_WEB_URL");
+
+    let client = ConsoleClient::new(Some(Arc::new(
+        |_: &HttpRequest| -> Result<HttpResponse, String> {
+            Ok(HttpResponse {
+                status: 403,
+                body: json(serde_json::json!({
+                    "code": "card_required",
+                    "message": "Add a card to sign in from the terminal.",
+                })),
+                ..Default::default()
+            })
+        },
+    ) as Transport));
+    let failure = client
+        .refresh("https://inference.runanywhere.ai", "refresh-token")
+        .expect_err("a card_required refresh must fail");
+    assert!(
+        failure.card_required,
+        "a card_required refresh must set RefreshError::card_required"
+    );
+    assert_eq!(
+        failure.message,
+        "Wally Cloud refused the refresh: Add a card to sign in from the terminal."
+    );
+    assert_eq!(
+        account::console_billing_url("https://inference.runanywhere.ai"),
+        "https://console.runanywhere.ai/cloud/billing",
+        "the billing URL refresh_session appends comes from the production API's own web origin"
+    );
+}
+
+// A card_required refusal still goes through the same terminal-safety filter
+// as every other refusal: a message carrying an escape sequence or a line
+// break never reaches stderr, only the typed signal and a generic line do.
+#[test]
+fn a_card_required_message_is_filtered_like_any_refusal() {
+    let client = ConsoleClient::new(Some(Arc::new(
+        |_: &HttpRequest| -> Result<HttpResponse, String> {
+            Ok(HttpResponse {
+                status: 403,
+                body: json(serde_json::json!({
+                    "code": "card_required",
+                    "message": "\u{1b}[31mAdd a card\nsecond line",
+                })),
+                ..Default::default()
+            })
+        },
+    ) as Transport));
+    let authorization = Authorization {
+        request_code: "ABCD-EFGH".to_string(),
+        poll_secret: "poll-secret".to_string(),
+        ..Authorization::default()
+    };
+    let outcome = client.poll("https://console.runanywhere.ai", &authorization);
+    assert_eq!(outcome.result, PollResult::CardRequired);
+    assert_eq!(outcome.error, "Wally Cloud refused the poll");
+
+    let failure = client
+        .refresh("https://inference.runanywhere.ai", "refresh-token")
+        .expect_err("a card_required refresh must fail");
+    assert!(failure.card_required);
+    assert_eq!(failure.message, "Wally Cloud refused the refresh");
+}
+
 #[test]
 fn a_rate_limit_surfaces_its_retry_after() {
     // A 429 with a numeric Retry-After: the error a caller sees should name the
@@ -934,6 +1041,7 @@ fn the_api_host_and_the_browser_host_stay_apart() {
     let mut env = EnvGuard::new();
     env.unset("WALLY_CONSOLE_URL");
     env.unset("WALLY_CONSOLE_WEB_URL");
+    env.unset("RCLI_CONSOLE_WEB_URL");
 
     let api = account::default_console_url();
     let browser = account::trusted_browser_origins(&api);
@@ -987,6 +1095,7 @@ fn the_trusted_browser_origin_is_never_empty() {
     let _lock = env_lock();
     let mut env = EnvGuard::new();
     env.unset("WALLY_CONSOLE_WEB_URL");
+    env.unset("RCLI_CONSOLE_WEB_URL");
 
     // An unknown console is trusted at its own origin and nowhere else, so a
     // dev or loopback console keeps working without widening what we accept.
@@ -1008,6 +1117,59 @@ fn the_trusted_browser_origin_is_never_empty() {
     assert_eq!(
         overridden,
         vec!["https://console.dev.example.test".to_string()]
+    );
+}
+
+// #137: the billing link (used when a card is required to finish signing in)
+// has to land on the same web origin trusted_browser_origins already trusts
+// for that API, or a dev/custom console sends a person to production billing.
+#[test]
+fn effective_console_web_origin_follows_the_same_trust_order() {
+    let _lock = env_lock();
+    let mut env = EnvGuard::new();
+    env.unset("WALLY_CONSOLE_WEB_URL");
+    env.unset("RCLI_CONSOLE_WEB_URL");
+
+    assert_eq!(
+        account::effective_console_web_origin("https://inference.runanywhere.ai"),
+        "https://console.runanywhere.ai",
+        "the production API's account pages live on the production web console"
+    );
+    assert_eq!(
+        account::effective_console_web_origin("http://localhost:8080"),
+        "http://localhost:8080",
+        "a custom API is its own web origin absent an override, same as trusted_browser_origins"
+    );
+    assert_eq!(
+        account::effective_console_web_origin("https://inference.runanywhere.ai/api-dev"),
+        "https://inference.runanywhere.ai/api-dev",
+        "a path-prefixed dev API is trusted at its own origin, same as trusted_browser_origins"
+    );
+
+    env.set("WALLY_CONSOLE_WEB_URL", "https://console.dev.example.test");
+    assert_eq!(
+        account::effective_console_web_origin("https://inference.runanywhere.ai"),
+        "https://console.dev.example.test",
+        "an explicit override wins even against the production API"
+    );
+}
+
+#[test]
+fn console_billing_url_is_the_web_origins_sibling_of_cloud_cli() {
+    let _lock = env_lock();
+    let mut env = EnvGuard::new();
+    env.unset("WALLY_CONSOLE_WEB_URL");
+    env.unset("RCLI_CONSOLE_WEB_URL");
+
+    assert_eq!(
+        account::console_billing_url("https://inference.runanywhere.ai"),
+        "https://console.runanywhere.ai/cloud/billing"
+    );
+
+    env.set("WALLY_CONSOLE_WEB_URL", "http://localhost:9000");
+    assert_eq!(
+        account::console_billing_url("https://inference.runanywhere.ai"),
+        "http://localhost:9000/cloud/billing"
     );
 }
 

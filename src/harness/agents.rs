@@ -1,6 +1,7 @@
 //! The coding-agent table and the per-agent config builders (port of
 //! src/harness/agents.cpp).
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
@@ -392,8 +393,12 @@ fn effective_args(agent: &Agent, args: &[String]) -> Vec<String> {
 
 /// Where OpenClaw keeps its state, and the config inside it.
 ///
-/// `OPENCLAW_STATE_DIR` wins, then `OPENCLAW_HOME`, then `~/.openclaw` — the
-/// order `resolveConfigDir` uses. Naming the state directory explicitly
+/// `OPENCLAW_STATE_DIR` wins, then `<home>/.openclaw` — the order
+/// `resolveStateDir` (src/config/state-dir.ts) uses. Both go through the same
+/// home OpenClaw itself resolves against (`effective_home`: `OPENCLAW_HOME`,
+/// then the OS home) and a `~` in either is expanded the same way, so this
+/// finds the directory OpenClaw really uses even when a variable was set to a
+/// literal `~/...`. Naming the state directory explicitly
 /// matters more than it looks: OpenClaw otherwise derives it from the config
 /// file's own folder, so pointing `OPENCLAW_CONFIG_PATH` at a temp file
 /// would move their agents and sessions into the temp directory for the run.
@@ -401,31 +406,20 @@ fn open_claw_state_directory() -> PathBuf {
     // `var_os`, not `var`: `std::getenv` in C++ returns the raw bytes
     // regardless of encoding, and `std::filesystem::path` is encoding-agnostic
     // on POSIX, so a legacy-encoded HOME/OPENCLAW_* must still resolve here
-    // instead of silently looking unset.
+    // instead of silently looking unset. Only a UTF-8 value can carry a `~`
+    // to expand; anything else is used as given.
     if let Some(state) = std::env::var_os("OPENCLAW_STATE_DIR") {
         if !state.is_empty() {
-            return PathBuf::from(state);
+            return match state.to_str() {
+                Some(state) => expand_home(state),
+                None => PathBuf::from(state),
+            };
         }
     }
-    if let Some(home) = std::env::var_os("OPENCLAW_HOME") {
-        if !home.is_empty() {
-            return Path::new(&home).join(".openclaw");
-        }
+    match effective_home() {
+        Some(home) => Path::new(&home).join(".openclaw"),
+        None => PathBuf::new(),
     }
-    if let Some(home) = std::env::var_os("HOME") {
-        if !home.is_empty() {
-            return Path::new(&home).join(".openclaw");
-        }
-    }
-    // PowerShell and cmd.exe leave HOME unset; openclaw falls back to the
-    // profile.
-    #[cfg(windows)]
-    if let Some(profile) = std::env::var_os("USERPROFILE") {
-        if !profile.is_empty() {
-            return Path::new(&profile).join(".openclaw");
-        }
-    }
-    PathBuf::new()
 }
 
 /// Drop our provider from every agent's generated `models.json`, so OpenClaw
@@ -487,16 +481,64 @@ fn drop_stale_open_claw_provider(state: &Path, config: &str) {
     }
 }
 
-/// `~` and `~/…` against HOME, as OpenClaw's `resolveUserPath` does, falling
-/// back to USERPROFILE on Windows the way `open_claw_state_directory` does.
-fn expand_home(path: &str) -> PathBuf {
+/// The OS home: HOME, falling back to USERPROFILE on Windows the way
+/// `open_claw_state_directory` does (PowerShell and cmd.exe leave HOME
+/// unset).
+fn os_home() -> Option<OsString> {
     let home = std::env::var_os("HOME").filter(|home| !home.is_empty());
     #[cfg(windows)]
     let home = home.or_else(|| std::env::var_os("USERPROFILE").filter(|home| !home.is_empty()));
-    match (path, home) {
-        ("~", Some(home)) => PathBuf::from(home),
-        (_, Some(home)) if path.starts_with("~/") => Path::new(&home).join(&path[2..]),
-        _ => PathBuf::from(path),
+    home
+}
+
+/// The remainder after a leading `~`, when that `~` is a home reference —
+/// bare, or immediately followed by `/` or `\` — mirroring the lookahead in
+/// OpenClaw's own regex (`^~(?=$|[\\/])`, `expandHomePrefix` in
+/// https://github.com/openclaw/openclaw/blob/main/src/infra/home-dir.ts
+/// lines 42-60). `~work` is a literal name, not a reference, so it is not
+/// touched.
+fn home_relative_suffix(path: &str) -> Option<&str> {
+    let rest = path.strip_prefix('~')?;
+    (rest.is_empty() || rest.starts_with('/') || rest.starts_with('\\')).then_some(rest)
+}
+
+/// OpenClaw's effective home
+/// (`resolveEffectiveHomeDir`, https://github.com/openclaw/openclaw/blob/main/packages/normalization-core/src/home-dir.ts
+/// lines 45-62, reached from `resolveUserPath` via `resolveEffectiveAgentDir`
+/// in agent-scope-config.ts): `OPENCLAW_HOME` wins over the OS home when set.
+/// If `OPENCLAW_HOME` is itself `~`-relative, that `~` is expanded against
+/// the OS home first; otherwise it is used as given.
+fn effective_home() -> Option<OsString> {
+    let openclaw_home = std::env::var_os("OPENCLAW_HOME").filter(|home| !home.is_empty());
+    match openclaw_home {
+        Some(openclaw_home) => match openclaw_home.to_str().and_then(home_relative_suffix) {
+            Some(rest) => {
+                let mut expanded = os_home()?;
+                expanded.push(rest);
+                Some(expanded)
+            }
+            None => Some(openclaw_home),
+        },
+        None => os_home(),
+    }
+}
+
+/// `~`, `~/…`, and `~\…` against `effective_home()`, as OpenClaw's
+/// `resolveUserPath` does. Only the `~` itself is substituted — like
+/// `expandHomePrefix`'s regex replace, the separator character that follows
+/// it (if any) is left untouched — so on POSIX a `~\...` path keeps its
+/// backslash as a literal character in the last component rather than being
+/// read as a directory separator, exactly as it would be under OpenClaw.
+fn expand_home(path: &str) -> PathBuf {
+    let Some(rest) = home_relative_suffix(path) else {
+        return PathBuf::from(path);
+    };
+    match effective_home() {
+        Some(mut home) => {
+            home.push(rest);
+            PathBuf::from(home)
+        }
+        None => PathBuf::from(path),
     }
 }
 
@@ -1147,11 +1189,11 @@ mod tests {
         assert!(left["providers"].get(PROVIDER_ID).is_none());
     }
 
-    /// Puts HOME and USERPROFILE back on drop, so a failed assertion in a
+    /// Puts each named variable back on drop, so a failed assertion in a
     /// test body cannot leak them into the tests after it.
-    struct RestoreHome([(&'static str, Option<std::ffi::OsString>); 2]);
+    struct RestoreEnv(Vec<(&'static str, Option<std::ffi::OsString>)>);
 
-    impl Drop for RestoreHome {
+    impl Drop for RestoreEnv {
         fn drop(&mut self) {
             for (name, value) in &self.0 {
                 // SAFETY: dropped before the env_lock() guard it sits beside.
@@ -1165,17 +1207,18 @@ mod tests {
         }
     }
 
-    /// Runs `body` with HOME (and on Windows USERPROFILE) set as given, `None`
-    /// meaning unset, restoring both after, even if `body` panics.
-    fn with_home<T>(home: Option<&str>, profile: Option<&str>, body: impl FnOnce() -> T) -> T {
+    /// Runs `body` with each named variable set as given (`None` meaning
+    /// unset), restoring all of them after, even if `body` panics.
+    fn with_env<T>(vars: &[(&'static str, Option<&str>)], body: impl FnOnce() -> T) -> T {
         let _lock = env_lock();
-        let _restore = RestoreHome([
-            ("HOME", std::env::var_os("HOME")),
-            ("USERPROFILE", std::env::var_os("USERPROFILE")),
-        ]);
-        // SAFETY: env_lock() is held until after `_restore` has run.
-        unsafe {
-            for (name, value) in [("HOME", home), ("USERPROFILE", profile)] {
+        let _restore = RestoreEnv(
+            vars.iter()
+                .map(|(name, _)| (*name, std::env::var_os(name)))
+                .collect(),
+        );
+        for (name, value) in vars {
+            // SAFETY: env_lock() is held until after `_restore` has run.
+            unsafe {
                 match value {
                     Some(value) => std::env::set_var(name, value),
                     None => std::env::remove_var(name),
@@ -1183,6 +1226,21 @@ mod tests {
             }
         }
         body()
+    }
+
+    /// Runs `body` with HOME (and on Windows USERPROFILE) set as given, `None`
+    /// meaning unset, restoring both after, even if `body` panics.
+    /// OPENCLAW_HOME is always cleared, so a value from the ambient
+    /// environment cannot leak into these HOME/USERPROFILE-only cases.
+    fn with_home<T>(home: Option<&str>, profile: Option<&str>, body: impl FnOnce() -> T) -> T {
+        with_env(
+            &[
+                ("OPENCLAW_HOME", None),
+                ("HOME", home),
+                ("USERPROFILE", profile),
+            ],
+            body,
+        )
     }
 
     #[test]
@@ -1211,6 +1269,126 @@ mod tests {
         });
         with_home(None, Some(""), || {
             assert_eq!(expand_home("~/work"), PathBuf::from("~/work"));
+        });
+    }
+
+    // resolveEffectiveHomeDir (home-dir.ts lines 45-62) checks OPENCLAW_HOME
+    // before falling back to the OS home.
+    // The state directory resolves against the same home, with the same `~`
+    // handling, as the agent directories cleaned inside it: OpenClaw's
+    // resolveStateDir expands OPENCLAW_STATE_DIR through resolveHomeRelativePath
+    // and otherwise uses <effective home>/.openclaw. A literal `~/...` value
+    // must not become a directory named `~` under the working directory.
+    #[test]
+    fn open_claw_state_directory_expands_home_like_openclaw() {
+        with_env(
+            &[
+                ("OPENCLAW_STATE_DIR", None),
+                ("OPENCLAW_HOME", Some("~/oc-home")),
+                ("HOME", Some("/h")),
+                ("USERPROFILE", None),
+            ],
+            || {
+                assert_eq!(
+                    open_claw_state_directory(),
+                    Path::new("/h").join("oc-home").join(".openclaw")
+                );
+            },
+        );
+        with_env(
+            &[
+                ("OPENCLAW_STATE_DIR", Some("~/state")),
+                ("OPENCLAW_HOME", None),
+                ("HOME", Some("/h")),
+                ("USERPROFILE", None),
+            ],
+            || {
+                assert_eq!(open_claw_state_directory(), Path::new("/h").join("state"));
+            },
+        );
+        with_env(
+            &[
+                ("OPENCLAW_STATE_DIR", None),
+                ("OPENCLAW_HOME", None),
+                ("HOME", Some("/h")),
+                ("USERPROFILE", None),
+            ],
+            || {
+                assert_eq!(
+                    open_claw_state_directory(),
+                    Path::new("/h").join(".openclaw")
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn expand_home_prefers_openclaw_home_over_home() {
+        with_env(
+            &[
+                ("OPENCLAW_HOME", Some("/oc")),
+                ("HOME", Some("/h")),
+                ("USERPROFILE", None),
+            ],
+            || {
+                assert_eq!(expand_home("~/work"), Path::new("/oc").join("work"));
+            },
+        );
+    }
+
+    // A `~`-relative OPENCLAW_HOME is itself expanded against the OS home
+    // first (home-dir.ts lines 54-59), rather than taken literally.
+    #[test]
+    fn expand_home_expands_a_tilde_relative_openclaw_home() {
+        with_env(
+            &[
+                ("OPENCLAW_HOME", Some("~/oc-home")),
+                ("HOME", Some("/h")),
+                ("USERPROFILE", None),
+            ],
+            || {
+                assert_eq!(
+                    expand_home("~/work"),
+                    Path::new("/h").join("oc-home").join("work")
+                );
+            },
+        );
+    }
+
+    // expandHomePrefix (home-dir.ts lines 42-60) substitutes only the `~`,
+    // leaving the separator character after it untouched; on POSIX a
+    // backslash is not a path separator, so it stays a literal character in
+    // the last component instead of splitting it, exactly as it would under
+    // OpenClaw.
+    #[test]
+    fn expand_home_recognizes_both_slash_and_backslash_prefixes() {
+        with_env(
+            &[
+                ("OPENCLAW_HOME", None),
+                ("HOME", Some("/h")),
+                ("USERPROFILE", None),
+            ],
+            || {
+                assert_eq!(expand_home("~/x"), Path::new("/h").join("x"));
+                #[cfg(unix)]
+                assert_eq!(expand_home("~\\x"), PathBuf::from("/h\\x"));
+                #[cfg(windows)]
+                assert_eq!(expand_home("~\\x"), Path::new("/h").join("x"));
+            },
+        );
+    }
+
+    // On Windows, backslash is a normal separator, so a fully backslashed
+    // OpenClaw agentDir override resolves under the home dir like any other
+    // multi-segment path.
+    #[cfg(windows)]
+    #[test]
+    fn expand_home_resolves_a_windows_backslash_path_under_home() {
+        with_home(None, Some(r"C:\Users\me"), || {
+            assert_eq!(
+                expand_home(r"~\agents\work"),
+                Path::new(r"C:\Users\me").join("agents").join("work")
+            );
         });
     }
 

@@ -16,7 +16,7 @@ use super::{
     USAGE_REQUESTS_CURSOR_MAX_CHARS,
 };
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct HttpRequest {
     pub method: String,
     pub url: String,
@@ -24,6 +24,19 @@ pub struct HttpRequest {
     /// Never logged.
     pub bearer_token: String,
     pub timeout_ms: i32,
+}
+
+impl std::fmt::Debug for HttpRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // bearer_token is a live credential; keep it out of any `{:?}`, dbg!, or
+        // test assert, the same way Grant's own Debug redacts its secret.
+        f.debug_struct("HttpRequest")
+            .field("method", &self.method)
+            .field("url", &self.url)
+            .field("body", &self.body)
+            .field("timeout_ms", &self.timeout_ms)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -159,7 +172,7 @@ impl Default for UsageQuery {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Authorization {
     pub request_code: String,
     /// Proves the process collecting the grant started it. Never logged.
@@ -167,6 +180,18 @@ pub struct Authorization {
     pub verification_url: String,
     pub expires_in: i32,
     pub interval: i32,
+}
+
+impl std::fmt::Debug for Authorization {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // poll_secret proves ownership of the login attempt; never print it.
+        f.debug_struct("Authorization")
+            .field("request_code", &self.request_code)
+            .field("verification_url", &self.verification_url)
+            .field("expires_in", &self.expires_in)
+            .field("interval", &self.interval)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Default for Authorization {
@@ -207,6 +232,7 @@ pub enum PollResult {
     Denied,
     Expired,
     Failed,
+    CardRequired,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -260,6 +286,10 @@ pub struct PollOutcome {
 pub struct RefreshError {
     pub message: String,
     pub unavailable: bool,
+    /// The console answered 403 `card_required` (#137): the account needs a
+    /// card on file before a refresh token is honored again. A caller with a
+    /// billing URL to offer branches on this instead of matching `message`.
+    pub card_required: bool,
 }
 
 #[derive(Clone, Default)]
@@ -854,6 +884,18 @@ fn format_refusal(operation: &str, message: &str) -> String {
     }
 }
 
+/// Whether a response is the contract's 403 `card_required` refusal. Only the
+/// code is read here: the message a person sees still goes through
+/// `http_error`, like every other refusal, so it gets the same terminal-safety
+/// filter (`console_refusal_message`).
+fn is_card_required(response: &HttpResponse) -> bool {
+    response.status == 403
+        && parse_object(response)
+            .ok()
+            .and_then(|object| contract::ApiError::from_json(&object).ok())
+            .is_some_and(|error| error.code == contract::ApiErrorCode::KCardRequired)
+}
+
 /// Every console failure in this file is phrased here, so this is the one
 /// place that decides what a person reads when the cloud says no. It is
 /// written for them, not for us: a status line and an internal endpoint tells
@@ -1205,6 +1247,10 @@ impl ConsoleClient {
         };
         if response.status != 200 {
             outcome.error = http_error("poll", &origin, &response, "");
+            if is_card_required(&response) {
+                outcome.result = PollResult::CardRequired;
+                return outcome;
+            }
             // A busy or briefly unavailable console has not denied anything,
             // and the person may still be approving in the browser. Treat it
             // as "still waiting" so the poll loop keeps going at its normal
@@ -1274,6 +1320,7 @@ impl ConsoleClient {
         let unavailable_err = |message: String, unavailable: bool| RefreshError {
             message,
             unavailable,
+            card_required: false,
         };
         if !super::session_token_is_safe(refresh_token) {
             return Err(unavailable_err(
@@ -1300,7 +1347,17 @@ impl ConsoleClient {
             .send(request)
             .map_err(|message| unavailable_err(message, true))?;
         if response.status != 200 {
+            // The same 403 card_required poll() reads above. Refresh is where
+            // the console really sends it (the other place is the approval
+            // page, which the browser shows).
             let message = http_error("refresh", &origin, &response, "");
+            if is_card_required(&response) {
+                return Err(RefreshError {
+                    message,
+                    unavailable: false,
+                    card_required: true,
+                });
+            }
             // Same distinction as WhoAmI: a busy console has not told us this
             // session is bad, only that it could not answer (InferenceInfra#444).
             let unavailable = response.status == 429 || response.status >= 500;

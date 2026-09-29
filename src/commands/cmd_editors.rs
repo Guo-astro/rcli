@@ -453,9 +453,13 @@ fn run(editor: &Editor, model: &str, args: &[String], options: &GlobalOptions) -
 
     let status;
     if editor.wiring == Wiring::ClaudeProfile {
-        // The profile, not the environment. Written before the app starts and
-        // taken back when it exits, so a crash here is the one case that leaves
-        // it applied — which is what `--restore` is for.
+        // The profile, not the environment: written before the app starts and
+        // taken back when wally exits. `open -W` keeps wally here for the
+        // session; the normal restore is below, and the interrupt handler right
+        // after apply covers a Ctrl-C or SIGTERM, so the reader never has to run
+        // `--restore` by hand. Only an uncatchable end (SIGKILL, power loss), or
+        // a restore that itself fails, can still leave it applied; `--restore`
+        // stays for that, and the handler tells the reader to run it.
         if let Err(failure) = desktop::apply_gateway(
             &shim.base_url,
             &shim.auth_token,
@@ -467,6 +471,30 @@ fn run(editor: &Editor, model: &str, args: &[String], options: &GlobalOptions) -
             harness::release(&endpoint);
             return 1;
         }
+        // A signal can kill `open -W` before the restore below runs, so put the
+        // profile back here too and end the process. restore_gateway is
+        // idempotent, so the restore on the normal path is then a no-op.
+        let editor_id = editor.id;
+        let _restore_on_signal = crate::util::interrupt::on_interrupt(move || {
+            // Runs on ctrlc's own thread, so reporting here is fine. A failed
+            // restore leaves the profile applied, so say so and point at the
+            // manual way out rather than exiting silently.
+            if let Err(failure) = desktop::restore_gateway() {
+                out::error_line(&failure);
+                out::error_line(&format!(
+                    "could not put {editor_id} back on Anthropic; run `wally {editor_id} --restore`"
+                ));
+            }
+            // Mirror the default interrupt disposition (exit 130), skipping
+            // destructors while the shim's thread may still be inside the SDK.
+            #[cfg(unix)]
+            // SAFETY: _exit has no preconditions and does not return.
+            unsafe {
+                libc::_exit(130)
+            };
+            #[cfg(not(unix))]
+            std::process::exit(130);
+        });
         // A new instance reads the gateway profile at startup. The one already
         // running keeps the profile it started with, and keeps whatever the
         // reader has open in it, which is the trade we want.
