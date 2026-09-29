@@ -574,11 +574,17 @@ impl StreamPipe {
     /// panicking. A poison means a worker or route thread unwound mid-write, but
     /// the flags and chunk buffer are still coherent to read and set, and the
     /// drop guards below run *during* an unwind: a panic there would abort the
-    /// whole process and drop every in-flight connection.
+    /// whole process and drop every in-flight connection. Clearing the poison
+    /// keeps the later condvar waits (which `.unwrap()` their lock result) from
+    /// re-panicking on the same poison this already recovered from.
     fn lock(&self) -> std::sync::MutexGuard<'_, StreamPipeShared> {
-        self.shared
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
+        match self.shared.lock() {
+            Ok(guard) => guard,
+            Err(poison) => {
+                self.shared.clear_poison();
+                poison.into_inner()
+            }
+        }
     }
 
     /// Blocks for the next transport chunk, waking every second to report a

@@ -455,35 +455,32 @@ fn run(editor: &Editor, model: &str, args: &[String], options: &GlobalOptions) -
     if editor.wiring == Wiring::ClaudeProfile {
         // The profile, not the environment: written before the app starts and
         // taken back when wally exits. `open -W` keeps wally here for the
-        // session; the normal restore is below, and the interrupt handler right
-        // after apply covers a Ctrl-C or SIGTERM, so the reader never has to run
-        // `--restore` by hand. Only an uncatchable end (SIGKILL, power loss), or
-        // a restore that itself fails, can still leave it applied; `--restore`
-        // stays for that, and the handler tells the reader to run it.
-        if let Err(failure) = desktop::apply_gateway(
-            &shim.base_url,
-            &shim.auth_token,
-            &desktop_aliases,
-            &format!("RunAnywhere \u{b7} {model}"),
-        ) {
-            out::error_line(&failure);
-            anthropic::stop(&mut shim);
-            harness::release(&endpoint);
-            return 1;
-        }
-        // A signal can kill `open -W` before the restore below runs, so put the
-        // profile back here too and end the process. restore_gateway is
-        // idempotent, so the restore on the normal path is then a no-op.
+        // session; the interrupt handler, installed *before* apply so no signal
+        // slips through the gap, covers a Ctrl-C or SIGTERM, so the reader never
+        // has to run `--restore` by hand. Only an uncatchable end (SIGKILL,
+        // power loss), or a restore that itself fails, can still leave it
+        // applied; `--restore` stays for that, and the handler says to run it.
+        //
+        // apply_gateway writes several files. The handler runs on ctrlc's own
+        // thread and takes `applied` before restoring, so a signal mid-apply
+        // waits for those writes to finish rather than racing them, and it only
+        // restores once `applied` is set — there is nothing to undo before then.
+        let applied = std::sync::Arc::new(std::sync::Mutex::new(false));
+        let applied_for_signal = std::sync::Arc::clone(&applied);
         let editor_id = editor.id;
         let _restore_on_signal = crate::util::interrupt::on_interrupt(move || {
-            // Runs on ctrlc's own thread, so reporting here is fine. A failed
-            // restore leaves the profile applied, so say so and point at the
-            // manual way out rather than exiting silently.
-            if let Err(failure) = desktop::restore_gateway() {
-                out::error_line(&failure);
-                out::error_line(&format!(
-                    "could not put {editor_id} back on Anthropic; run `wally {editor_id} --restore`"
-                ));
+            let done = applied_for_signal
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            // A failed restore leaves the profile applied, so say so and point
+            // at the manual way out rather than exiting silently.
+            if *done {
+                if let Err(failure) = desktop::restore_gateway() {
+                    out::error_line(&failure);
+                    out::error_line(&format!(
+                        "could not put {editor_id} back on Anthropic; run `wally {editor_id} --restore`"
+                    ));
+                }
             }
             // Mirror the default interrupt disposition (exit 130), skipping
             // destructors while the shim's thread may still be inside the SDK.
@@ -495,6 +492,23 @@ fn run(editor: &Editor, model: &str, args: &[String], options: &GlobalOptions) -
             #[cfg(not(unix))]
             std::process::exit(130);
         });
+        {
+            // Held across apply so the handler above blocks here on a signal
+            // instead of restoring mid-write; released before `launch`.
+            let mut done = applied.lock().unwrap_or_else(|poison| poison.into_inner());
+            if let Err(failure) = desktop::apply_gateway(
+                &shim.base_url,
+                &shim.auth_token,
+                &desktop_aliases,
+                &format!("RunAnywhere \u{b7} {model}"),
+            ) {
+                out::error_line(&failure);
+                anthropic::stop(&mut shim);
+                harness::release(&endpoint);
+                return 1;
+            }
+            *done = true;
+        }
         // A new instance reads the gateway profile at startup. The one already
         // running keeps the profile it started with, and keeps whatever the
         // reader has open in it, which is the trade we want.
