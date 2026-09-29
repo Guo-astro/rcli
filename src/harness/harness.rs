@@ -753,6 +753,9 @@ enum InstallOffer {
     Installed,
     /// Failed, or installed somewhere not yet on PATH; already reported.
     Stopped,
+    /// The full next-steps were already printed (e.g. install Node first), so
+    /// the caller must not also append the one-line hint.
+    Guided,
 }
 
 /// Offers to run the tool's installer, but only to a person at the terminal:
@@ -761,11 +764,21 @@ fn offer_install(tool: &str) -> InstallOffer {
     let Some(installer) = installer(tool) else {
         return InstallOffer::NotOffered;
     };
-    if !term::stdin_is_tty() || !term::stderr_is_tty() {
-        return InstallOffer::NotOffered;
-    }
+    // An npm tool with no npm on PATH: there is no command we can offer to run,
+    // so spell out the order instead of a single vague line. Node.js is the
+    // prerequisite (it brings npm); once it is there, a re-run installs the tool
+    // itself. Shown whether or not we could prompt, since it is the real fix.
     if installer.needs_npm && !on_path("npm") {
-        out::status_line("it installs with npm, which comes with Node.js: https://nodejs.org");
+        out::status_line(&format!(
+            "{tool} installs with npm, which comes with Node.js. Two steps:"
+        ));
+        out::status_line("  1. install Node.js from https://nodejs.org (it includes npm)");
+        out::status_line(&format!(
+            "  2. run this again and wally installs {tool} for you"
+        ));
+        return InstallOffer::Guided;
+    }
+    if !term::stdin_is_tty() || !term::stderr_is_tty() {
         return InstallOffer::NotOffered;
     }
     if !confirm(&format!(
@@ -810,6 +823,7 @@ pub fn ensure_installed(tool: &str) -> bool {
     match offer_install(tool) {
         InstallOffer::Installed => true,
         InstallOffer::Stopped => false,
+        InstallOffer::Guided => false,
         InstallOffer::NotOffered => {
             out::status_line(&install_hint(tool));
             false
