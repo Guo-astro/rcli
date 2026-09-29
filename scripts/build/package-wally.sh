@@ -122,8 +122,11 @@ if [[ -n "${KIT}" && -d "${KIT}/third_party" ]]; then
         }
         copy_kit_runtime "${gomp}"
         gomp_licence=/usr/share/doc/libgomp1/copyright
+        # Debian/Ubuntu ship the GCC Runtime Library Exception at the dpkg path
+        # above; Arch/Manjaro ship the same licence under /usr/share/licenses.
+        [[ -f "${gomp_licence}" ]] || gomp_licence=/usr/share/licenses/libgomp/RUNTIME.LIBRARY.EXCEPTION
         [[ -f "${gomp_licence}" ]] || {
-          echo "error: bundling libgomp.so.1 needs its licence at ${gomp_licence}" >&2
+          echo "error: bundling libgomp.so.1 needs its licence at /usr/share/doc/libgomp1/copyright" >&2
           exit 1
         }
         mkdir -p "${STAGE}/licenses"

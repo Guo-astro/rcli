@@ -55,6 +55,7 @@ runs:
         case "${{ inputs.platform }}" in
           macos-arm64) cmake --build build -j "$(sysctl -n hw.logicalcpu)" ;;
           linux-x64)   cmake --build build --target wally -j "$(nproc)" ;;
+          linux-arm64) cmake --build build --target wally -j "$(nproc)" ;;
           *)           cmake --build build --config Release ;;
         esac
 
@@ -71,6 +72,8 @@ runs:
             WALLY_VERSION="$ver" bash scripts/build/package-wally.sh build macos-arm64 "${{ inputs.variant }}" ;;
           linux-x64)
             WALLY_VERSION="$ver" bash scripts/build/package-wally.sh build linux-x86_64 "${{ inputs.variant }}" ;;
+          linux-arm64)
+            WALLY_VERSION="$ver" bash scripts/build/package-wally.sh build linux-arm64 "${{ inputs.variant }}" ;;
           windows-x64)
             pwsh -File scripts/build/package-wally-windows.ps1 -BuildDir build -Version "$ver" -KitDir "${{ inputs.kit-dir }}" -Channel "${{ inputs.variant }}" ;;
           windows-arm64)

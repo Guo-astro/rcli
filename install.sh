@@ -357,7 +357,8 @@ case "${os}/${arch}" in
     # neither and there is no build for it.
     Darwin/*)                  fail "Wally needs an Apple Silicon Mac. Detected: ${arch}" ;;
     Linux/x86_64 | Linux/amd64) PLATFORM="linux-x86_64"; check_linux_system ;;
-    Linux/*)                   fail "Wally has no Linux ${arch} build yet — x86_64 only. Build from source: https://github.com/${REPO}#build-from-source" ;;
+    Linux/aarch64 | Linux/arm64) PLATFORM="linux-arm64"; check_linux_system ;;
+    Linux/*)                   fail "Wally has no Linux ${arch} build yet — x86_64 and arm64 only. Build from source: https://github.com/${REPO}#build-from-source" ;;
     *)                         fail "Wally has no build for ${os}. On Windows, use install.ps1." ;;
 esac
 ok "${PLATFORM}"

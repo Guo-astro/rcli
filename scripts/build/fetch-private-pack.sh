@@ -26,6 +26,10 @@ case "$PLATFORM" in
     echo "No private engine overlay on linux-x64 (OSS kit only)."
     exit 0
     ;;
+  linux-arm64)
+    echo "No private engine overlay on linux-arm64 (OSS kit only)."
+    exit 0
+    ;;
   *)
     echo "error: unknown platform '$PLATFORM'" >&2
     exit 2
