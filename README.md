@@ -1,8 +1,10 @@
-<div align="center">
+<p align="center">
   <img src="docs/assets/wally.gif" alt="Wally, the RunAnywhere mascot" width="120">
-  <h1>Wally</h1>
-  <a href="https://github.com/RunanywhereAI/wally/releases/latest"><img src="https://img.shields.io/github/v/release/RunanywhereAI/wally?label=release" alt="Release"></a>
-</div>
+</p>
+
+# Wally
+
+[![Release](https://img.shields.io/github/v/release/RunanywhereAI/wally?label=release)](https://github.com/RunanywhereAI/wally/releases/latest)
 
 **Run open models on your own machine, or hosted when the job outgrows it.**
 
