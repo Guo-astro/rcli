@@ -30,6 +30,16 @@ BIN_DIR="${HOME}/.local/bin"
 # (glibc_max, system_libraries); scripts/ci/check-versions.py fails when they
 # drift. libc's own family is left out: glibc is checked by version above.
 MIN_GLIBC="2.35"
+# The arm64 bottle has its own floor entry so the two arches can diverge again
+# (mirrors versions.toml [linux_abi_arm64]; check-versions.py holds it). The
+# arm64 case below swaps these in before check_linux_system runs. The
+# system-library list is the same on both arches (the loader differs, but that
+# is checked by the glibc version, not looked up here).
+MIN_GLIBC_ARM64="2.35"
+MIN_GLIBCXX_ARM64="3.4.30"
+# What the refusals name as a system that qualifies.
+DISTRO_HINT="Ubuntu 22.04+, Debian 12+ and other distributions from 2022 on"
+MIN_GCC="12"
 LINUX_SYSTEM_LIBRARIES="libstdc++.so.6 libgcc_s.so.1 libssl.so.3 libcrypto.so.3 libcurl.so.4"
 
 # The highest GLIBCXX_/CXXABI_ symbol version the bottle's own ELF files ask
@@ -103,7 +113,7 @@ check_linux_system() {
     if [ -z "$glibc" ]; then
         warn "could not read the glibc version; continuing"
     elif [ "$(printf '%s\n%s\n' "$MIN_GLIBC" "$glibc" | sort -V | head -n1)" != "$MIN_GLIBC" ]; then
-        fail "Wally needs glibc ${MIN_GLIBC} or newer; this system has ${glibc}. Ubuntu 22.04+, Debian 12+ and other distributions from 2022 on qualify."
+        fail "Wally needs glibc ${MIN_GLIBC} or newer; this system has ${glibc}. ${DISTRO_HINT} qualify."
     fi
     ldconfig_bin="$(command -v ldconfig 2>/dev/null || true)"
     [ -n "$ldconfig_bin" ] || { [ -x /sbin/ldconfig ] && ldconfig_bin=/sbin/ldconfig; }
@@ -152,11 +162,39 @@ check_libstdcxx_symbols() {
     max_glibcxx="$(printf '%s\n' "$listing" | grep '^GLIBCXX_' | sed 's/^GLIBCXX_//' | sort -V | tail -1)"
     max_cxxabi="$(printf '%s\n' "$listing" | grep '^CXXABI_' | sed 's/^CXXABI_//' | sort -V | tail -1)"
     if [ -n "$max_glibcxx" ] && [ "$(printf '%s\n%s\n' "$MIN_GLIBCXX" "$max_glibcxx" | sort -V | head -n1)" != "$MIN_GLIBCXX" ]; then
-        fail "Wally needs a libstdc++ with GLIBCXX_${MIN_GLIBCXX} or newer (from GCC 12+); this system's libstdc++ only provides up to GLIBCXX_${max_glibcxx}. Ubuntu 22.04+, Debian 12+ and other distributions from 2022 on qualify."
+        fail "Wally needs a libstdc++ with GLIBCXX_${MIN_GLIBCXX} or newer (from GCC ${MIN_GCC}+); this system's libstdc++ only provides up to GLIBCXX_${max_glibcxx}. ${DISTRO_HINT} qualify."
     fi
     if [ -n "$max_cxxabi" ] && [ "$(printf '%s\n%s\n' "$MIN_CXXABI" "$max_cxxabi" | sort -V | head -n1)" != "$MIN_CXXABI" ]; then
-        fail "Wally needs a libstdc++ with CXXABI_${MIN_CXXABI} or newer (from GCC 12+); this system's libstdc++ only provides up to CXXABI_${max_cxxabi}. Ubuntu 22.04+, Debian 12+ and other distributions from 2022 on qualify."
+        fail "Wally needs a libstdc++ with CXXABI_${MIN_CXXABI} or newer (from GCC ${MIN_GCC}+); this system's libstdc++ only provides up to CXXABI_${max_cxxabi}. ${DISTRO_HINT} qualify."
     fi
+}
+
+# check_linux_system reads the system's libc and libstdc++, but not what the
+# bottle's own files ask of them. A floor declared here can drift from the
+# payload (0.7.1's arm64 Sherpa and OpenMP libraries needed glibc 2.38 under a
+# declared 2.35), and a host that clears every check above then unpacks and
+# fails to start. Reads the
+# highest GLIBC_/GLIBCXX_ version each shipped ELF file names, the way
+# check_libstdcxx_symbols reads the system libstdc++, and refuses by file name
+# before anything under ${LIB_DIR} changes. A floor that drifts from the payload
+# is caught here instead of on the user's machine.
+check_bottle_symbols() {
+    staged_dir="$1"
+    # Unknown host versions were already warned about in check_linux_system.
+    [ -n "${glibc:-}" ] || return 0
+    for file in "${staged_dir}/bin/wally" "${staged_dir}"/lib/*.so*; do
+        [ -f "$file" ] || continue
+        listing="$(grep -aoE 'GLIBC(XX)?_[0-9]+(\.[0-9]+)*' "$file" 2>/dev/null || true)"
+        need_glibc="$(printf '%s\n' "$listing" | grep '^GLIBC_' | sed 's/^GLIBC_//' | sort -V | tail -1)"
+        need_glibcxx="$(printf '%s\n' "$listing" | grep '^GLIBCXX_' | sed 's/^GLIBCXX_//' | sort -V | tail -1)"
+        name="${file#"${staged_dir}"/}"
+        if [ -n "$need_glibc" ] && [ "$(printf '%s\n%s\n' "$need_glibc" "$glibc" | sort -V | head -n1)" != "$need_glibc" ]; then
+            fail "This build's ${name} needs glibc ${need_glibc}; this system has ${glibc}. A newer distribution is needed."
+        fi
+        if [ -n "$need_glibcxx" ] && [ -n "${max_glibcxx:-}" ] && [ "$(printf '%s\n%s\n' "$need_glibcxx" "$max_glibcxx" | sort -V | head -n1)" != "$need_glibcxx" ]; then
+            fail "This build's ${name} needs libstdc++ GLIBCXX_${need_glibcxx}; this system's libstdc++ only provides up to GLIBCXX_${max_glibcxx}. A newer distribution is needed."
+        fi
+    done
 }
 
 # Runs a binary once and keeps what it printed. A binary that cannot start
@@ -357,7 +395,9 @@ case "${os}/${arch}" in
     # neither and there is no build for it.
     Darwin/*)                  fail "Wally needs an Apple Silicon Mac. Detected: ${arch}" ;;
     Linux/x86_64 | Linux/amd64) PLATFORM="linux-x86_64"; check_linux_system ;;
-    Linux/aarch64 | Linux/arm64) PLATFORM="linux-arm64"; check_linux_system ;;
+    Linux/aarch64 | Linux/arm64) PLATFORM="linux-arm64"
+                                 MIN_GLIBC="$MIN_GLIBC_ARM64"; MIN_GLIBCXX="$MIN_GLIBCXX_ARM64"
+                                 check_linux_system ;;
     Linux/*)                   fail "Wally has no Linux ${arch} build yet — x86_64 and arm64 only. Build from source: https://github.com/${REPO}#build-from-source" ;;
     *)                         fail "Wally has no build for ${os}. On Windows, use install.ps1." ;;
 esac
@@ -394,6 +434,9 @@ step "Installing to ${LIB_DIR}"
 tar -xzf "${tmp}/${ASSET}" -C "$tmp"
 staged="${tmp}/wally-${PLATFORM}"
 [ -x "${staged}/bin/wally" ] || fail "Archive did not contain bin/wally as expected."
+case "$PLATFORM" in
+    linux-*) check_bottle_symbols "$staged" ;;
+esac
 
 # The new tree is copied beside the old one, started once, and only then
 # renamed into place. A build that cannot run on this machine therefore fails
@@ -462,20 +505,25 @@ if [ "${PATH_ALREADY_HAS_BIN_DIR}" -eq 0 ]; then
     case "$(basename "${SHELL:-}")" in
         zsh)  rc="${HOME}/.zshrc" ;;
         bash) rc="${HOME}/.bashrc" ;;
+        # fish reads neither ~/.profile nor `export`: it has its own config file
+        # and its own syntax, and PATH is a list there.
+        fish) rc="${XDG_CONFIG_HOME:-${HOME}/.config}/fish/config.fish"
+              line="contains -- \"${path_entry}\" \$PATH; or set -gx PATH \"${path_entry}\" \$PATH"
+              mkdir -p "$(dirname "$rc")" 2>/dev/null || true ;;
         *)    rc="${HOME}/.profile" ;;
     esac
     # Matching the directory rather than our exact line: somebody who added
     # ~/.local/bin to their own rc file by hand wrote it their own way, and
     # appending a second entry for a directory already on PATH helps nobody.
     if [ -f "$rc" ] && grep -q "$path_entry" "$rc" 2>/dev/null; then
-        ok "${BIN_DIR} is already on PATH in ${rc} (open a new shell)"
+        ok "${BIN_DIR} is already on PATH in ${rc}; to use wally in this terminal, run: . ${rc}"
     elif [ -e "$rc" ] && [ ! -f "$rc" ]; then
         # A directory or a device where the rc file should be. Nothing to append
         # to, and the shell's own redirection error would reach the terminal.
         warn "${rc} is not a regular file; add this line to your shell startup: ${line}"
     elif { [ -w "$rc" ] || [ ! -e "$rc" ]; } &&
         printf '\n# Added by the Wally installer\n%s\n' "$line" >> "$rc" 2>/dev/null; then
-        warn "added ${BIN_DIR} to your PATH in ${rc} (open a new shell)"
+        warn "added ${BIN_DIR} to your PATH in ${rc}; to use wally in this terminal, run: . ${rc}"
     else
         # Saying "added" when the write failed is how somebody ends up with a
         # terminal that cannot find wally and no idea why.

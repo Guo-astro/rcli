@@ -18,8 +18,8 @@ on it. Hosted models bill against your RunAnywhere credit.
 
 ## Install
 
-macOS on Apple Silicon (Intel Macs are not supported) and Linux on x86-64 with
-glibc 2.35 or newer (Ubuntu 22.04+, Debian 12+; no ARM build yet):
+macOS on Apple Silicon (Intel Macs are not supported), or Linux on x86-64 or
+ARM64 with glibc 2.35 or newer (Ubuntu 22.04+, Debian 12+):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/RunanywhereAI/wally/main/install.sh | sh
@@ -30,6 +30,10 @@ Windows (x64 and ARM64):
 ```powershell
 irm https://raw.githubusercontent.com/RunanywhereAI/wally/main/install.ps1 | iex
 ```
+
+The installer adds wally to your PATH for new terminals. In the terminal you
+installed from, run the line it prints (`. ~/.zshrc` or similar), or open a new
+one, before your first `wally` command. On Windows, open a new terminal.
 
 ## Run a model on your machine
 
