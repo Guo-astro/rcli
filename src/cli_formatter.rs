@@ -1163,6 +1163,11 @@ mod tests {
                     "Serve a model over an OpenAI-compatible API",
                     "Chat",
                 ),
+                leaf(
+                    "decisions",
+                    "Score questions with Eve, the decision model",
+                    "Chat",
+                ),
                 namespace(
                     "models",
                     "Models",

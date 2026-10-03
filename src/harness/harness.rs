@@ -418,6 +418,13 @@ pub fn resolve(model: &str, options: &GlobalOptions, harness_command: &str) -> O
             base_url = format!("http://127.0.0.1:{port}/v1");
         }
     } else {
+        // Decision models are not chat models. Refuse before consulting the
+        // hosted-model cache, whose empty-cache fail-open would otherwise let
+        // a decision model reach a coding tool's /chat/completions request.
+        if super::is_decisions_model(model) {
+            out::error_line(&super::decisions_model_refusal(model));
+            return None;
+        }
         let requested = catalog::find(model);
         if requested
             .map(|entry| entry.harness_compatible)

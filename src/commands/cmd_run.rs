@@ -968,12 +968,16 @@ fn apply_lora_adapter(adapter_path: &str, scale: f32) -> bool {
 }
 
 fn run_llm(options: &GlobalOptions, verb: LlmVerb, prompt: &str, params: &RunParams) -> i32 {
-    if bootstrap::bootstrap(options).is_err() {
-        return 1;
-    }
     if params.model.is_empty() {
         error_line("--model is required (a catalog id, alias, hf.co/... ref or URL)");
         return 2;
+    }
+    if crate::harness::is_decisions_model(&params.model) {
+        error_line(&crate::harness::decisions_model_refusal(&params.model));
+        return 2;
+    }
+    if bootstrap::bootstrap(options).is_err() {
+        return 1;
     }
 
     let mut engine_hint = match resolve_engine_hint(&params.engine) {

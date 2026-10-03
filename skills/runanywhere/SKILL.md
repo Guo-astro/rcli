@@ -82,6 +82,20 @@ wally account usage --requests      # one page of settled requests, last day; --
 
 Read-only, and scoped to the signed-in account.
 
+## Decisions with Eve
+
+`eve`, the default for `wally decisions`, scores named labels without
+generating prose:
+
+```bash
+wally decisions --input "Checkout is blank" --ask "Is this a bug?"
+wally decide --input-file ticket.txt --choice "Owner=frontend,payments,account"
+```
+
+Use `--json` when another tool needs the raw response. Do not send `eve` (or
+its retired names `pplx-decider-v1` and `qwev`) to `wally run` or a coding
+harness; those surfaces refuse it and point back here.
+
 ## When something is wrong
 
 - **"not signed in"** — `wally account login`.

@@ -8,6 +8,8 @@ use wally::account::console_contract as contract;
 // test located this at compile time via a CMake define; `include_bytes!` gets
 // the same effect without one.
 const CONTRACT_BYTES: &[u8] = include_bytes!("../contracts/wally-cli-v1.openapi.json");
+const DECISIONS_CONTRACT_BYTES: &[u8] =
+    include_bytes!("../contracts/wally-decisions-public-v1.openapi.json");
 
 #[test]
 fn binding_matches_the_pinned_contract() {
@@ -20,6 +22,84 @@ fn binding_matches_the_pinned_contract() {
         contract::CONTRACT_SHA256,
         "contract hash drifted from the generated binding"
     );
+}
+
+#[test]
+fn decisions_binding_matches_the_pinned_contract() {
+    use sha2::{Digest, Sha256};
+    use wally::account::decisions_contract;
+    let digest = hex::encode(Sha256::digest(DECISIONS_CONTRACT_BYTES));
+    assert_eq!(digest, decisions_contract::CONTRACT_SHA256);
+
+    let versions = include_str!("../versions.toml");
+    assert!(
+        versions.contains(&format!("decisions_contract_sha256 = \"{digest}\"")),
+        "versions.toml decisions contract pin drifted"
+    );
+    // The source commit lives in versions.toml alone; here it only has to be
+    // a full commit id, so a re-vendor touches one pin, not two.
+    let commit = versions
+        .lines()
+        .find_map(|line| line.strip_prefix("decisions_source_commit = \""))
+        .and_then(|rest| rest.strip_suffix('"'))
+        .expect("versions.toml names the decisions source commit");
+    assert_eq!(
+        commit.len(),
+        40,
+        "decisions_source_commit is a full commit id"
+    );
+    assert!(commit.bytes().all(|b| b.is_ascii_hexdigit()));
+}
+
+#[test]
+fn decisions_response_reads_the_served_prompt_format_as_an_integer() {
+    // The decision model serves prompt format 3, an integer on the wire. The
+    // contract spells it as an untyped `enum: [2, 3]`, which the generator
+    // once carried as a string, failing every response.
+    use wally::account::decisions_contract as decision;
+    let response = serde_json::json!({
+        "object": "decisions", "model": "eve", "prompt_format_version": 3,
+        "answers": {
+            "owner": {"type": "choice", "probabilities": {"billing": 0.989, "auth": 0.011},
+                      "label_mass": 1.0, "choice": "billing"},
+            "severity": {"type": "score", "probabilities": {"0": 0.1, "1": 0.2, "2": 0.7},
+                         "label_mass": 1.0, "score": 1.6}
+        },
+        "usage": {"prompt_tokens": 214, "completion_tokens": 0, "total_tokens": 214}
+    });
+    let parsed = decision::DecisionsResponse::from_json(&response).expect("typed response");
+    assert_eq!(parsed.prompt_format_version, 3);
+    assert_eq!(parsed.answers.0["owner"].choice.as_deref(), Some("billing"));
+    assert_eq!(parsed.answers.0["severity"].score, Some(1.6));
+    assert_eq!(parsed.to_json(), response);
+}
+
+#[test]
+fn decisions_contract_round_trips_typed_questions_and_answers() {
+    use wally::account::decisions_contract as decision;
+    let request = serde_json::json!({
+        "model": "eve",
+        "input": "The checkout is blank",
+        "questions": [
+            {"id": "bug", "type": "yes_no", "question": "Is this a bug?"},
+            {"id": "owner", "type": "choice", "question": "Who owns it?",
+             "options": [{"name": "frontend"}, {"name": "payments"}]}
+        ],
+        "temperature": 1.0
+    });
+    let parsed = decision::DecisionsRequest::from_json(&request).expect("typed request");
+    assert_eq!(parsed.questions.len(), 2);
+    assert_eq!(parsed.to_json(), request);
+
+    let response = serde_json::json!({
+        "object": "decisions", "model": "eve", "prompt_format_version": 3,
+        "answers": {
+            "bug": {"type": "yes_no", "probabilities": {"yes": 0.9, "no": 0.1}, "label_mass": 0.8}
+        },
+        "usage": {"prompt_tokens": 42, "completion_tokens": 0, "total_tokens": 42}
+    });
+    let parsed = decision::DecisionsResponse::from_json(&response).expect("typed response");
+    assert_eq!(parsed.answers.0["bug"].probabilities.0["yes"], 0.9);
 }
 
 #[test]
