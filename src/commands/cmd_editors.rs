@@ -617,6 +617,18 @@ fn run(editor: &Editor, model: &str, args: &[String], options: &GlobalOptions) -
         for (index, catalog_model) in catalog.iter().take(3).enumerate() {
             _family_slots.push(ScopedEnv::new(FAMILY_SLOTS[index], &catalog_model.id));
         }
+        // The picker renders each bound slot as "Custom <Family> model"
+        // unless its description override is set, so label all three with
+        // the provider. The label keeps the real id; only this suffix changes.
+        const SLOT_DESCRIPTIONS: [&str; 3] = [
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL_DESCRIPTION",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL_DESCRIPTION",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL_DESCRIPTION",
+        ];
+        let mut _slot_descriptions: Vec<ScopedEnv> = Vec::new();
+        for name in SLOT_DESCRIPTIONS {
+            _slot_descriptions.push(ScopedEnv::new(name, "RunAnywhere model"));
+        }
         let mut launch_args = Vec::with_capacity(args.len() + 2);
         if !args.iter().any(|a| a == "--model") {
             launch_args.push("--model".to_string());
