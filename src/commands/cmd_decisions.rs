@@ -271,6 +271,7 @@ fn build_request(p: &crate::cli::Parsed) -> Result<contract::DecisionsRequest, S
         questions,
         temperature: p.get_f64("--temperature"),
         prompt_format_version: None,
+        images: None,
     };
     validate(&request)?;
     Ok(request)

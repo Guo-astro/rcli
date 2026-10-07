@@ -181,6 +181,13 @@
         },
         "type": "object"
       },
+      "DecisionImage": {
+        "description": "A PNG, JPEG or WebP image as a base64 data URL (data:image/png;base64,...). The bytes must be an image of the type the URL names. The model resizes each image to between 65,536 and 262,144 pixels.",
+        "maxLength": 1000000,
+        "minLength": 23,
+        "pattern": "^data:image/(png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$",
+        "type": "string"
+      },
       "DecisionOption": {
         "additionalProperties": false,
         "properties": {
@@ -254,6 +261,15 @@
         "additionalProperties": false,
         "description": "POST /v1/decisions: score typed questions about one input with a decision model, in prefill, without generating text. Each question is answered with a probability per option. Text fields are strings only.",
         "properties": {
+          "images": {
+            "description": "Images every question is asked about, shown to the model before the input, in order. Only a model that takes images accepts them; any other refuses the request with 400 before anything is billed. Each image is part of every question's prompt, so it counts toward each question's limit and is billed once per question. They count toward the 1 MiB body limit too. No URL is fetched.",
+            "items": {
+              "$ref": "#/components/schemas/DecisionImage"
+            },
+            "maxItems": 8,
+            "minItems": 1,
+            "type": "array"
+          },
           "input": {
             "$ref": "#/components/schemas/DecisionText",
             "description": "The text every question is asked about. It is rendered once into each question's prompt, so it is billed once per question."
@@ -847,7 +863,7 @@
       },
       "SystemOneRequest": {
         "additionalProperties": true,
-        "description": "POST /v1/systemone: the System One request shape (state, and typed noul, choice and score questions keyed by name), answered by a decision model in prefill without generating text. Unknown top-level fields are ignored, as in the System One schema this follows (OpenRouter's and TypeSafe's), so this object is open at its top level and nowhere else: `provider`, `session_id`, `trace`, `user` and any other unknown field are accepted and ignored. `temperature`, `prompt_format_version`, `return_prompt_token_ids` and `chat_template_kwargs` are not part of this API (use /v1/decisions) and are refused unless null.",
+        "description": "POST /v1/systemone: the System One request shape (state, and typed noul, choice and score questions keyed by name), answered by a decision model in prefill without generating text. Unknown top-level fields are ignored, as in the System One schema this follows (OpenRouter's and TypeSafe's), so this object is open at its top level and nowhere else: `provider`, `session_id`, `trace`, `user` and any other unknown field are accepted and ignored. `temperature`, `prompt_format_version`, `return_prompt_token_ids`, `chat_template_kwargs` and `images` are not part of this API (use /v1/decisions) and are refused unless null.",
         "examples": [
           {
             "model": "eve",
@@ -887,6 +903,10 @@
         ],
         "properties": {
           "chat_template_kwargs": {
+            "description": "Not part of this API: use /v1/decisions for it.",
+            "type": "null"
+          },
+          "images": {
             "description": "Not part of this API: use /v1/decisions for it.",
             "type": "null"
           },
@@ -1307,7 +1327,7 @@
       },
       "request": {
         "path": "public/decisions_request.schema.json",
-        "sha256": "6157245e2159d01da76eb74abd897d48659d01f67bfde15945f39011d8d4c172"
+        "sha256": "5547bec340bc840a6cfdfbf719c7275fb3a3a914eb94810a62de6aadd608b435"
       },
       "response": {
         "path": "public/decisions_response.schema.json",
@@ -1315,7 +1335,7 @@
       },
       "systemone_request": {
         "path": "public/systemone_request.schema.json",
-        "sha256": "645cc39a19e0166178eccb27a45749c6c6ecf4355ff262c91a4e523db481ab81"
+        "sha256": "dd73324fb306daccad68ab2a300e0bc66236deba7f550ef5e0541136ef100bf0"
       },
       "systemone_response": {
         "path": "public/systemone_response.schema.json",

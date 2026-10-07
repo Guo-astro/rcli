@@ -380,6 +380,11 @@
             "title": "Cached Input Per Mtok",
             "type": "integer"
           },
+          "decisions_image_input": {
+            "description": "True when POST /v1/decisions takes `images` for the model; any other model refuses them. constants.toml [[models]] decisions_image_input.",
+            "title": "Decisions Image Input",
+            "type": "boolean"
+          },
           "decisions_only": {
             "description": "True when the model serves only POST /v1/decisions and /v1/systemone; its chat and text completions are refused. constants.toml [[models]] decisions_only.",
             "title": "Decisions Only",
@@ -417,7 +422,8 @@
           "input_per_mtok",
           "output_per_mtok",
           "cached_input_per_mtok",
-          "decisions_only"
+          "decisions_only",
+          "decisions_image_input"
         ],
         "title": "CatalogModelResponse",
         "type": "object"
@@ -2393,8 +2399,8 @@
   },
   "x-runanywhere-source": {
     "artifact": "contracts/control-plane-v1.openapi.json",
-    "branch": "chore/decisions-contract-gate",
-    "commit": "95c1df76d6e783987c627f117598c18f86fe5a34",
+    "branch": "feat/decisions-images-eve",
+    "commit": "520f07802cb9abc9c64748df73481134a178e71c",
     "repository": "RunanywhereAI/InferenceInfra"
   }
 }

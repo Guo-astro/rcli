@@ -11,8 +11,8 @@ version = "0.8.2"
 
 [contracts]
 # Vendored from InferenceInfra at this exact revision.
-decisions_source_commit = "eb0e661a03bedd7223ba5e63a6e271e6852162f7"
-decisions_contract_sha256 = "2dedb7959a12921efb82fa0e17bfdd0e78ee1cc21c80a1cc438db1ddcdbd69a7"
+decisions_source_commit = "520f07802cb9abc9c64748df73481134a178e71c"
+decisions_contract_sha256 = "d00eb4398ccdd5629fb26a0ec696f22916942ed5b26e029274f669f2ac050eff"
 
 [sdk]
 # The published C++ desktop kit this tree builds against; bump the SHAs with it.
