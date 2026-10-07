@@ -59,6 +59,10 @@ decision model" (it named the retired Qwev model) and its `--model` default is
 updated for those two strings only, and the corpus replays byte-exact against
 the Rust binary.
 
+`wally decisions` gained a `--route` option saving `local` or `cloud` as the
+default route for flag-less invocations. `help__decisions` and `help__decide`
+were updated for those two rows only; nothing else about them changed.
+
 Re-capture from a binary (only when behaviour changes on purpose):
 
     python3 scripts/test/golden-capture.py --binary build/wally --out tests/golden --cases tests/golden/cases.json
@@ -71,3 +75,9 @@ row's size from the build its id pulls (it had shown the MLX build's size while
 `pull <id>` fetched the GGUF), and started showing `mlx-ternary-bonsai-27b-2bit`
 for the one MLX-only row whose merge key names no registered model. Those sizes
 and that id are the only differences from the C++ capture.
+
+Fourteen `models list` cases were re-captured from the Rust binary when
+`models list` gained `--cloud`, `--all` started adding the account's cloud
+models, and `--local` took over the old meaning of `--all`. The differences are
+the `--all`/`--local`/`--cloud` help lines, the empty-list hint (now `--local`), the "cloud models not shown"
+line on a signed-out `--all`, and a `cloud` field on each `--json` row.

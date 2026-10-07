@@ -12,10 +12,11 @@
 //!   versions.toml. No protoc runs and nothing generated is committed.
 //! - `HAS_*`: the engine/component capability flags the C++ build got as
 //!   `WALLY_HAS_*` compile definitions; each becomes `cfg(wally_has_*)`.
-//! - `DEFAULT_MODEL_ID`, `BAKED_CONSOLE_API_URL`, `BAKED_CONSOLE_WEB_ORIGIN`:
-//!   exported to the crate as compile-time env values. The endpoints are only ever
-//!   set for a dev-channel build; they live in the build tree, as the generated
-//!   C++ header did, and are never printed.
+//! - `DEFAULT_MODEL_ID`, `CONSOLE_*`: exported to the crate as compile-time env
+//!   values. The console endpoints are required configure inputs; a build with
+//!   none (CI on a fork pull request) exports empty values and resolves no
+//!   default console at runtime. They live in the build tree and are never
+//!   printed.
 //! - `CMAKE_FILE_API_REPLY` / `LINK_PROBE_TARGET`: where CMake recorded the link
 //!   line of `wally_link_probe` — the kit closure the C++ `wally` executable had.
 //!   The static library needs none of it; every binary cargo links does.
@@ -26,6 +27,7 @@ use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use sha2::{Digest, Sha256};
 
@@ -72,12 +74,22 @@ fn main() {
     println!("cargo:rerun-if-changed={}", env_file.display());
     let build_env = match fs::read_to_string(&env_file) {
         Ok(text) => parse_env(&text),
-        Err(_) => panic!(
-            "{} not found. Configure CMake first so the SDK kit is resolved:\n  \
-             cmake -B build -G Ninja -DCMAKE_PREFIX_PATH=/path/to/kit\n\
-             or set WALLY_BUILD_ENV to the wally-build.env of another build dir.",
-            env_file.display()
-        ),
+        Err(_) => {
+            // CMake owns the kit: discovery, auto-fetch, pin checks and the link
+            // closure. An IDE's first sync runs bare `cargo build` without ever
+            // configuring CMake, so kick it once from here. The fetched kit and
+            // the generated env file persist, so later builds never re-enter.
+            self_configure(&manifest, &env_file);
+            let text = fs::read_to_string(&env_file).unwrap_or_else(|e| {
+                panic!(
+                    "{} still missing after configure: {e}. The kit fetch needs \
+                     `gh` signed in (`gh auth login`), or point WALLY_BUILD_ENV \
+                     at the wally-build.env of another build dir.",
+                    env_file.display()
+                )
+            });
+            parse_env(&text)
+        }
     };
 
     // Capability flags → cfg(wally_has_*), declared so check-cfg knows them.
@@ -98,7 +110,14 @@ fn main() {
         .cloned()
         .unwrap_or_else(|| "glm-5.3-flash".to_string());
     println!("cargo:rustc-env=WALLY_DEFAULT_MODEL_ID={default_model}");
-    for key in ["BAKED_CONSOLE_API_URL", "BAKED_CONSOLE_WEB_ORIGIN"] {
+    // The console endpoints this binary talks to. Required configure inputs
+    // (CMakeLists.txt); CI passes empty values for fork pull requests, which
+    // WALLY_CONSOLE_API_URL can still override at runtime.
+    for key in [
+        "CONSOLE_API_URL",
+        "CONSOLE_WEB_ORIGIN",
+        "CONSOLE_WEB_ORIGIN_ALT",
+    ] {
         let value = build_env.get(key).cloned().unwrap_or_default();
         println!("cargo:rustc-env=WALLY_{key}={value}");
     }
@@ -111,6 +130,36 @@ fn main() {
     generate_proto(&idl, &versions);
 
     link_native(&build_env);
+}
+
+/// Run the CMake configure that writes the build env file. Only when it is
+/// absent: a normal flow (CMake driving cargo) never lands here, and a failed
+/// fetch leaves the panic above to explain why. When the env path follows the
+/// `<build_dir>/generated/wally-build.env` contract, its build dir is the one
+/// configured; anything else points at a tree we cannot configure, so the
+/// default build dir is the best guess. Ninja is named only when that dir is
+/// new; CMake refuses to change an existing dir's generator.
+fn self_configure(manifest: &Path, env_file: &Path) {
+    let build_dir = env_file
+        .parent()
+        .filter(|p| p.ends_with("generated"))
+        .and_then(|generated| generated.parent())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| manifest.join("build"));
+    let mut cmd = Command::new("cmake");
+    cmd.arg("-B").arg(&build_dir);
+    if !build_dir.join("CMakeCache.txt").exists() {
+        cmd.arg("-G").arg("Ninja");
+    }
+    let status = cmd.current_dir(manifest).status();
+    match status {
+        Ok(s) if s.success() => {}
+        Ok(s) => panic!(
+            "cmake configure failed ({s}); run it manually for the full output:\
+             \n  cmake -B build -G Ninja"
+        ),
+        Err(_) => panic!("cmake not found on PATH; install it to build wally"),
+    }
 }
 
 /// `key = "value"` lines from versions.toml (flat by design; see its header).

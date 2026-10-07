@@ -25,7 +25,7 @@ fn now_seconds() -> i64 {
 /// EnvGuard held for the test's whole body).
 fn seed(expires_at: i64) -> Result<(), String> {
     let credentials = Credentials {
-        console_url: "https://console.runanywhere.ai".to_string(),
+        console_url: "https://console.example.test".to_string(),
         email: "developer@example.test".to_string(),
         access_token: "old-access-token".to_string(),
         refresh_token: "refresh-token".to_string(),
@@ -88,7 +88,7 @@ fn ephemeral_config_and_passthrough() {
         let provider = &config["provider"]["runanywhere"];
         if config["model"] != json!("runanywhere/glm-5.3")
             || provider["npm"] != json!("@ai-sdk/openai-compatible")
-            || provider["options"]["baseURL"] != json!("https://console.runanywhere.ai/v1")
+            || provider["options"]["baseURL"] != json!("https://console.example.test/v1")
             || provider["options"]["apiKey"] != json!("old-access-token")
             || provider["models"]["glm-5.3"]["name"] != json!("glm-5.3")
         {
@@ -265,6 +265,7 @@ fn config_injects_limit_and_cost() {
             max_output: 0,
             input_per_mtok: 600000,
             output_per_mtok: 2200000,
+            cached_input_per_mtok: 0,
         }],
     ))
     .expect("parse config");
@@ -336,12 +337,13 @@ fn opencode_config_declares_the_harness() {
         max_output: 0,
         input_per_mtok: 0,
         output_per_mtok: 0,
+        cached_input_per_mtok: 0,
     }];
     let configs = [
         harness::build_open_code_config("glm-5.3-flash", "http://127.0.0.1:52431/v1", "", &catalog),
         harness::build_open_code_cloud_config(
             "glm-5.3-flash",
-            "https://inference.runanywhere.ai/v1",
+            "https://api.example.test/v1",
             "tok",
             &catalog,
         ),
@@ -353,4 +355,27 @@ fn opencode_config_declares_the_harness() {
             serde_json::json!({"X-RA-Harness": "opencode"})
         );
     }
+}
+
+#[test]
+fn config_prices_cache_reads_only_when_the_catalog_has_a_cached_price() {
+    let config = |cached: i64| -> Value {
+        let j: Value = serde_json::from_str(&harness::build_open_code_cloud_config(
+            "glm-5.3-flash",
+            "https://x/v1",
+            "tok",
+            &[CatalogModel {
+                id: "glm-5.3-flash".to_string(),
+                context_window: 1048576,
+                max_output: 0,
+                input_per_mtok: 600000,
+                output_per_mtok: 2200000,
+                cached_input_per_mtok: cached,
+            }],
+        ))
+        .expect("parse config");
+        j["provider"]["runanywhere"]["models"]["glm-5.3-flash"]["cost"].clone()
+    };
+    assert_eq!(config(110000)["cache_read"], json!(0.11));
+    assert!(config(0).get("cache_read").is_none());
 }

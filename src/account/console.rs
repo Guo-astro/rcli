@@ -256,6 +256,7 @@ pub struct CatalogPrice {
     pub id: String,
     pub input_per_mtok: i64,
     pub output_per_mtok: i64,
+    pub cached_input_per_mtok: i64,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -1216,10 +1217,16 @@ impl ConsoleClient {
             && refusal.as_ref().and_then(|error| error.code)
                 == Some(decisions::ErrorCode::KModelNotEntitled)
         {
+            // Entitlement is account-level, not session-level: the token was
+            // just accepted (a bad one answers 401, which `call` refreshes
+            // and retries before ever reaching here), so telling the person
+            // to log in again sends them on a trip that cannot change the
+            // answer. Point at what can: the model is unavailable on THIS
+            // account, and the local checkpoints don't need entitlement.
             return failed(format!(
-                "your session is not entitled to {}; sign in again with `wally account logout` \
-                 and `wally account login`, then retry",
-                request_body.model
+                "{} is not available on this account (it is not enabled for it yet); \
+                 use a local model — `wally decisions --local -m clef-flash-9b`",
+                request_body.model,
             ));
         }
         // A refused request (an input over the model's window, a model that
@@ -1915,6 +1922,17 @@ impl ConsoleClient {
         console_url: &str,
         access_token: &str,
     ) -> (IdentityResult, Vec<ModelInfo>, String) {
+        self.fetch_models_within(console_url, access_token, 0)
+    }
+
+    /// `fetch_models` bounded to `timeout_ms` in all (0: the transport's
+    /// defaults), for a caller that has something else to show if it fails.
+    pub fn fetch_models_within(
+        &self,
+        console_url: &str,
+        access_token: &str,
+        timeout_ms: i32,
+    ) -> (IdentityResult, Vec<ModelInfo>, String) {
         if !super::session_token_is_safe(access_token) {
             return (
                 IdentityResult::Failed,
@@ -1931,7 +1949,7 @@ impl ConsoleClient {
             url: format!("{origin}/v1/models"),
             body: String::new(),
             bearer_token: access_token.to_string(),
-            timeout_ms: 0,
+            timeout_ms,
         };
         let response = match self.send(request) {
             Ok(response) => response,
@@ -2039,6 +2057,7 @@ impl ConsoleClient {
                 id: model.id,
                 input_per_mtok: model.input_per_mtok,
                 output_per_mtok: model.output_per_mtok,
+                cached_input_per_mtok: model.cached_input_per_mtok,
             })
             .collect();
         (IdentityResult::Ok, prices, String::new())

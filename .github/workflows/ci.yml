@@ -18,6 +18,16 @@ on:
 permissions:
   contents: read
 
+# The console endpoints configure and bake into the binary. They are repository
+# variables, not secrets: nothing here grants access, and a fork pull request
+# receives neither. WALLY_CONSOLE_OPTIONAL lets a fork PR build without them
+# (the binary then resolves no default console). Builds on this repo use the
+# existing dev-console variables. The alt origin is optional and unset here.
+env:
+  WALLY_BAKED_CONSOLE_API_URL: ${{ vars.WALLY_DEV_CONSOLE_API_URL }}
+  WALLY_BAKED_CONSOLE_WEB_ORIGIN: ${{ vars.WALLY_DEV_CONSOLE_WEB_ORIGIN }}
+  WALLY_CONSOLE_OPTIONAL: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && '1' || '' }}
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -101,7 +111,7 @@ jobs:
         with:
           persist-credentials: false
           repository: RunanywhereAI/runanywhere-sdks
-          ref: b3a2b0147d8c66190c14a53bc04286efd6a4d64a
+          ref: e595580a72452595a4a5b8abc137cad10132ba75
           path: .deps/runanywhere-sdks
       - name: Install ninja
         run: brew install ninja

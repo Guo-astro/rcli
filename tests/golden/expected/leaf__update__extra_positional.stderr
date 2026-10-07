@@ -5,4 +5,3 @@ Usage: wally update [OPTIONS]
 
 Options:
   -h, --help                  Show help
-      --nightly               Track the development channel

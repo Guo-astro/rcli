@@ -10,9 +10,11 @@ use std::ffi::CString;
 
 use crate::bootstrap::GlobalOptions;
 use crate::catalog::model_ref;
-use crate::io::output::error_line;
+use crate::harness;
+use crate::io::output::{error_line, status_line};
 use crate::io::proto::{self, parse_proto_buffer, v1, ProtoBuffer};
 use crate::sys;
+use crate::util::term;
 
 use super::cmd_pull::pull_model_flow;
 
@@ -106,7 +108,7 @@ pub fn ensure_model_ready(
 
     // Link any on-disk artifacts before deciding whether to pull.
     if let Err(error) = refresh_registry() {
-        crate::io::output::status_line(&format!("warning: registry refresh failed: {error}"));
+        status_line(&format!("warning: registry refresh failed: {error}"));
     }
 
     // Display name (best effort) + downloaded check.
@@ -140,13 +142,44 @@ pub fn ensure_model_ready(
     }
 
     if !downloaded {
-        crate::io::output::status_line(&format!(
-            "model {} not downloaded — pulling",
-            resolved.model_id
-        ));
-        let pull_code = pull_model_flow(options, &resolved.model_id);
-        if pull_code != 0 {
-            return Err(pull_code);
+        // Offline callers (`wally decisions --local`) promise no network
+        // during scoring, but an explicit pull is the caller's own download:
+        // offer it on a terminal exactly like the harness commands do, then
+        // run it with the network back on. A "no" (or no terminal, where no
+        // answer can come) keeps the old refusal naming the pull command.
+        if options.offline {
+            if term::stdin_is_tty()
+                && harness::confirm(&format!(
+                    "model {} is not downloaded. Pull it now? [y/N] ",
+                    resolved.model_id
+                ))
+            {
+                let online = GlobalOptions {
+                    offline: false,
+                    ..options.clone()
+                };
+                status_line(&format!("pulling model {} now", resolved.model_id));
+                let pull_code = pull_model_flow(&online, &resolved.model_id);
+                if pull_code != 0 {
+                    return Err(pull_code);
+                }
+            } else {
+                error_line(&format!(
+                    "model {} is not downloaded, and this command runs offline; \
+                     pull it first with `wally models pull {}`",
+                    resolved.model_id, resolved.model_id
+                ));
+                return Err(1);
+            }
+        } else {
+            status_line(&format!(
+                "model {} not downloaded — pulling",
+                resolved.model_id
+            ));
+            let pull_code = pull_model_flow(options, &resolved.model_id);
+            if pull_code != 0 {
+                return Err(pull_code);
+            }
         }
     }
 

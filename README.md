@@ -46,7 +46,8 @@ wally run qwen3 "Hello"     # one answer and exit
 wally serve qwen3           # OpenAI-compatible API on :8080 (macOS, Linux)
 ```
 
-`wally models list --all` shows everything you can pull. Any Hugging Face GGUF
+`wally models list --local` shows everything you can pull; `--cloud` shows the
+cloud models on your account, and `--all` shows both. Any Hugging Face GGUF
 works too, by its full path:
 
 ```bash
@@ -113,6 +114,19 @@ Use `--json` for the raw API response, or `--request FILE` for the complete
 typed request shape. Decision models are refused by `wally run` and the coding
 tools, which point back here.
 
+Eve is also runnable on this machine. Pull a local checkpoint and point
+`-m` at it; `--local` (or just a local `-m`) scores in-process through the
+SDK's decision component, `--cloud` forces the hosted path:
+
+```bash
+wally models pull clef-flash-9b
+wally decisions --local -m clef-flash-9b \
+  --input "Checkout is blank after Pay" --ask "Is this a software bug?"
+```
+
+Both transports share the request flags, the human rendering and the `--json`
+document, so the same invocation works locally and hosted.
+
 ## Models at a glance
 
 | Family | Pull |
@@ -137,7 +151,7 @@ has the full catalog.
 
 | Models | |
 |---|---|
-| `wally models list --all` | models on this machine, or the whole catalog |
+| `wally models list` | models on this machine; `--local` for the whole catalog, `--cloud` for your cloud models, `--all` for both |
 | `wally models pull` / `rm` | download or delete a model |
 | `wally models show` | size, context window, files |
 | `wally models default` | the model coding tools open with |
