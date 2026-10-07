@@ -63,6 +63,10 @@ the Rust binary.
 default route for flag-less invocations. `help__decisions` and `help__decide`
 were updated for those two rows only; nothing else about them changed.
 
+`wally decisions` gained a repeatable `--image` option and an example using
+it. `help__decisions` and `help__decide` were re-captured from the Rust binary
+for that option row and example only; nothing else about them changed.
+
 Re-capture from a binary (only when behaviour changes on purpose):
 
     python3 scripts/test/golden-capture.py --binary build/wally --out tests/golden --cases tests/golden/cases.json

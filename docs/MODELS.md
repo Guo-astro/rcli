@@ -38,6 +38,8 @@ Decision models return label probabilities rather than generated text. Use
 `wally decisions` (alias `wally decide`), not `wally run` or a coding harness.
 It supports yes/no (`--ask`), choices (`--choice`) and ordered levels
 (`--score`); `wally decisions --help` shows the request-file and JSON forms.
+`--image FILE` (repeatable, up to 8) adds PNG, JPEG or WebP images on the
+hosted path only, for a model that takes them.
 
 `eve` is the hosted decision model and the default, so `-m` is optional. Two
 local checkpoints run the same questions on-device:
