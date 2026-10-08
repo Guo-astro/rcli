@@ -57,8 +57,9 @@ while IFS= read -r arg; do
     esac
 done < "${LINK_ARGS}"
 # The static library's own native dependencies (Rust std, native-tls's
-# Security.framework), then the C++ runtime the kit needs.
-rust_native=(-framework CoreFoundation -framework Security -liconv)
+# Security.framework, ImageIO and CoreGraphics for HEIC photos), then the C++
+# runtime the kit needs.
+rust_native=(-framework CoreFoundation -framework Security -framework ImageIO -framework CoreGraphics -liconv)
 
 # The published runanywhere-swift tarball does not export RunAnywhereMLXRuntime
 # (Swift MLX without a second commons archive). Apple wally therefore needs the

@@ -22,22 +22,28 @@ use crate::cli::{App, ValueType};
 use crate::cli_formatter::{examples_footer, Example};
 use crate::commands::model_setup::ensure_model_ready;
 use crate::config::preferences::{self, DecisionsRoute};
+use crate::io::heic;
 use crate::io::output as out;
 use crate::io::proto::{parse_proto_buffer, serialize, v1, ProtoBuffer};
 use crate::sys;
 use crate::util::term;
 
 const DEFAULT_MODEL: &str = crate::harness::DEFAULT_DECISIONS_MODEL;
+/// The gateway's body caps (InferenceInfra constants.toml [gateway]
+/// decisions_max_request_bytes, decisions_max_image_request_bytes): 1 MiB
+/// outside the images, 24 MiB in all with them. Images go at full size: the
+/// gateway resizes each to what the model sees, and refuses one it will not
+/// decode (its pixel caps) with a 400 that names the image.
 const MAX_BODY_BYTES: usize = 1024 * 1024;
+const MAX_IMAGE_BODY_BYTES: usize = 24 * 1024 * 1024;
 /// The pinned contract, read for its closed objects when a `--request` file is
 /// checked for fields the server would refuse (or this CLI would drop).
 const CONTRACT: &str = include_str!("../../contracts/wally-decisions-public-v1.openapi.json");
 /// Widest label column in the human rendering; longer labels are cut.
 const LABEL_MAX_CHARS: usize = 32;
-/// The contract's `images`: at most 8, each a base64 data URL of at most
-/// 1,000,000 characters, PNG, JPEG or WebP only.
+/// The contract's `images`: at most 8, each a base64 data URL, PNG, JPEG or
+/// WebP only.
 const MAX_IMAGES: usize = 8;
-const MAX_IMAGE_URL_CHARS: usize = 1_000_000;
 const IMAGE_URL_PREFIXES: [&str; 3] = [
     "data:image/png;base64,",
     "data:image/jpeg;base64,",
@@ -74,19 +80,37 @@ fn base64(bytes: &[u8]) -> String {
     out
 }
 
-/// An image file as the data URL the contract takes, its type read from its
-/// bytes rather than its name.
+/// An image file as the data URL the contract takes, at its full size, its
+/// type read from its bytes rather than its name. A HEIC photo is sent as a
+/// JPEG made from it. The gateway judges every image's size, except one whose
+/// base64 alone is past the 24 MiB a request with images may be, which is
+/// refused here before it is read.
 fn image_data_url(path: &str) -> Result<String, String> {
-    let bytes = std::fs::read(path).map_err(|error| format!("could not read {path}: {error}"))?;
-    let kind =
-        image_kind(&bytes).ok_or_else(|| format!("{path} is not a PNG, JPEG or WebP image"))?;
-    let url = format!("data:image/{kind};base64,{}", base64(&bytes));
-    if url.len() > MAX_IMAGE_URL_CHARS {
-        return Err(format!(
-            "{path} is too large: an image may be at most about 730 KiB ({MAX_IMAGE_URL_CHARS} base64 characters)"
-        ));
+    let refuse_large = |size: u64| {
+        let chars = size.div_ceil(3) * 4;
+        if chars > MAX_IMAGE_BODY_BYTES as u64 {
+            return Err(format!(
+                "{path} is too large to send: as base64 it is {:.1} MiB, over the 24 MiB a request with images may be",
+                chars as f64 / 1_048_576.0
+            ));
+        }
+        Ok(())
+    };
+    let size = std::fs::metadata(path)
+        .map_err(|error| format!("could not read {path}: {error}"))?
+        .len();
+    refuse_large(size)?;
+    let mut bytes =
+        std::fs::read(path).map_err(|error| format!("could not read {path}: {error}"))?;
+    if heic::is_heif(&bytes) {
+        bytes = heic::to_jpeg(&bytes).map_err(|reason| {
+            format!("{path} is a HEIC photo that could not be converted to JPEG: {reason}")
+        })?;
+        refuse_large(bytes.len() as u64)?;
     }
-    Ok(url)
+    let kind = image_kind(&bytes)
+        .ok_or_else(|| format!("{path} is not a PNG, JPEG, WebP or HEIC image"))?;
+    Ok(format!("data:image/{kind};base64,{}", base64(&bytes)))
 }
 
 fn read_stdin() -> Result<String, String> {
@@ -204,16 +228,22 @@ pub(crate) fn validate(request: &contract::DecisionsRequest) -> Result<(), Strin
                     "images[{i}] must be a base64 PNG, JPEG or WebP data URL"
                 ));
             }
-            if image.len() > MAX_IMAGE_URL_CHARS {
-                return Err(format!(
-                    "images[{i}] may be at most {MAX_IMAGE_URL_CHARS} characters"
-                ));
-            }
         }
     }
-    let bytes = crate::io::json::dump(&request.to_json());
-    if bytes.len() > MAX_BODY_BYTES {
-        return Err("request body exceeds 1 MiB".to_string());
+    // The gateway's own test: past 1 MiB, the body less its image strings
+    // must still be within 1 MiB.
+    let bytes = crate::io::json::dump(&request.to_json()).len();
+    let images = request.images.as_deref().unwrap_or_default();
+    let image_chars: usize = images.iter().map(String::len).sum();
+    if bytes > MAX_BODY_BYTES && bytes - image_chars > MAX_BODY_BYTES {
+        return Err(if images.is_empty() {
+            "request body exceeds 1 MiB".to_string()
+        } else {
+            "request body exceeds 1 MiB outside its images".to_string()
+        });
+    }
+    if bytes > MAX_IMAGE_BODY_BYTES {
+        return Err("request body with its images exceeds 24 MiB".to_string());
     }
     Ok(())
 }
@@ -256,9 +286,6 @@ fn build_request(p: &crate::cli::Parsed) -> Result<contract::DecisionsRequest, S
             ));
         }
         let raw = read_path(&path)?;
-        if raw.len() > MAX_BODY_BYTES {
-            return Err("request body exceeds 1 MiB".to_string());
-        }
         let value: serde_json::Value =
             serde_json::from_str(&raw).map_err(|error| format!("invalid request JSON: {error}"))?;
         // The generated reader is tolerant (right for responses), so a
@@ -1282,7 +1309,7 @@ pub fn register_decisions(app: &mut App) {
     cmd.add_option(
         "--image",
         ValueType::Text,
-        "PNG, JPEG or WebP file every question is about (repeatable, up to 8; cloud only)",
+        "PNG, JPEG, WebP or HEIC file every question is about, sent at full size (repeatable, up to 8; cloud only; HEIC needs macOS)",
     )
     .multi();
     cmd.add_option(
@@ -1389,14 +1416,84 @@ mod tests {
         std::fs::write(&gif, b"GIF89a").unwrap();
         assert!(image_data_url(gif.to_str().unwrap())
             .unwrap_err()
-            .contains("not a PNG, JPEG or WebP"));
+            .contains("not a PNG, JPEG, WebP or HEIC"));
+        // Full size: the gateway, not this CLI, judges an image's size.
         let big = dir.join("big.png");
         let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
-        bytes.resize(750_000, 0);
-        std::fs::write(&big, bytes).unwrap();
-        assert!(image_data_url(big.to_str().unwrap())
+        bytes.resize(5_000_000, 7);
+        std::fs::write(&big, &bytes).unwrap();
+        assert_eq!(
+            image_data_url(big.to_str().unwrap()).unwrap(),
+            format!("data:image/png;base64,{}", base64(&bytes))
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn an_image_whose_base64_alone_is_past_24_mib_is_refused_unread() {
+        let dir = std::env::temp_dir().join(format!("wally-image-cap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // 18 MiB is the most whose base64 (four characters for three bytes)
+        // fits; past it the file is refused on its length, without reading
+        // it (this one is sparse and holds no image at all).
+        let limit = (MAX_IMAGE_BODY_BYTES / 4 * 3) as u64;
+        let pano = dir.join("pano.jpg");
+        std::fs::File::create(&pano)
+            .unwrap()
+            .set_len(limit + 1)
+            .unwrap();
+        assert_eq!(
+            image_data_url(pano.to_str().unwrap()).unwrap_err(),
+            format!(
+                "{} is too large to send: as base64 it is 24.0 MiB, over the 24 MiB a request with images may be",
+                pano.display()
+            )
+        );
+        // At the limit it is read, and typed from its bytes.
+        let mut at = vec![0xFF, 0xD8, 0xFF, 0xE0];
+        at.resize(limit as usize, 0);
+        std::fs::write(&pano, &at).unwrap();
+        assert!(image_data_url(pano.to_str().unwrap())
+            .unwrap()
+            .starts_with("data:image/jpeg;base64,/9j/4A"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_heic_photo_is_sent_as_jpeg_whatever_its_name() {
+        let dir = std::env::temp_dir().join(format!("wally-heic-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let photo = dir.join("IMG_0001.jpg");
+        std::fs::write(
+            &photo,
+            include_bytes!("../../tests/fixtures/quadrants-orientation-6-gps.heic"),
+        )
+        .unwrap();
+        let sent = image_data_url(photo.to_str().unwrap());
+        if cfg!(target_os = "macos") {
+            assert!(sent.unwrap().starts_with("data:image/jpeg;base64,/9j/"));
+        } else {
+            let error = sent.unwrap_err();
+            assert!(error.contains("IMG_0001.jpg is a HEIC photo"), "{error}");
+            assert!(error.contains("macOS only"), "{error}");
+        }
+
+        let broken = dir.join("broken.heic");
+        let mut bytes = b"\0\0\0\x18ftypheic\0\0\0\0mif1heic".to_vec();
+        bytes.resize(256, 0);
+        std::fs::write(&broken, bytes).unwrap();
+        let error = image_data_url(broken.to_str().unwrap()).unwrap_err();
+        assert!(
+            error.contains("broken.heic is a HEIC photo that could not be converted to JPEG"),
+            "{error}"
+        );
+        // Cut short: refused before decoding, which would make it black.
+        let cut = dir.join("cut.heic");
+        let whole = include_bytes!("../../tests/fixtures/quadrants-grid.heic");
+        std::fs::write(&cut, &whole[..whole.len() - 1]).unwrap();
+        assert!(image_data_url(cut.to_str().unwrap())
             .unwrap_err()
-            .contains("too large"));
+            .ends_with("could not be converted to JPEG: the file is incomplete or damaged"));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -1429,8 +1526,66 @@ mod tests {
             "data:image/gif;base64,R0lG".to_string()
         ])))
         .is_err());
-        let long = format!("data:image/png;base64,{}", "A".repeat(MAX_IMAGE_URL_CHARS));
-        assert!(validate(&request(Some(vec![long]))).is_err());
+    }
+
+    #[test]
+    fn the_body_is_held_to_the_gateways_caps_and_nothing_else() {
+        // `pad` bytes more text: the input takes up to its own 1,000,000-char
+        // limit, the question the rest.
+        let request = |pad: usize, images: Vec<usize>| contract::DecisionsRequest {
+            model: DEFAULT_MODEL.to_string(),
+            input: format!("x{}", "a".repeat(pad.min(990_000))),
+            questions: vec![contract::DecisionQuestion::YesNoQuestion(
+                contract::YesNoQuestion {
+                    id: "q1".to_string(),
+                    question: format!("Over $100?{}", "a".repeat(pad.saturating_sub(990_000))),
+                    r#type: "yes_no".to_string(),
+                    ..Default::default()
+                },
+            )],
+            images: (!images.is_empty()).then(|| {
+                images
+                    .into_iter()
+                    .map(|chars| format!("data:image/png;base64,{}", "A".repeat(chars)))
+                    .collect()
+            }),
+            ..Default::default()
+        };
+        let bytes =
+            |request: &contract::DecisionsRequest| crate::io::json::dump(&request.to_json()).len();
+        let outside = |request: &contract::DecisionsRequest| {
+            bytes(request)
+                - request
+                    .images
+                    .iter()
+                    .flatten()
+                    .map(String::len)
+                    .sum::<usize>()
+        };
+
+        // No images: 1 MiB.
+        let room = MAX_BODY_BYTES - bytes(&request(0, vec![]));
+        assert!(validate(&request(room, vec![])).is_ok());
+        assert_eq!(
+            validate(&request(room + 1, vec![])).unwrap_err(),
+            "request body exceeds 1 MiB"
+        );
+        // With images: 1 MiB outside them, however large they are.
+        let room = MAX_BODY_BYTES - outside(&request(0, vec![2_000_000]));
+        assert!(validate(&request(room, vec![2_000_000])).is_ok());
+        assert_eq!(
+            validate(&request(room + 1, vec![2_000_000])).unwrap_err(),
+            "request body exceeds 1 MiB outside its images"
+        );
+        // And 24 MiB in all, but no cap on any one image.
+        assert!(validate(&request(0, vec![12_000_000, 12_000_000])).is_ok());
+        let fill = MAX_IMAGE_BODY_BYTES - bytes(&request(0, vec![0]));
+        assert_eq!(bytes(&request(0, vec![fill])), MAX_IMAGE_BODY_BYTES);
+        assert!(validate(&request(0, vec![fill])).is_ok());
+        assert_eq!(
+            validate(&request(0, vec![fill + 1])).unwrap_err(),
+            "request body with its images exceeds 24 MiB"
+        );
     }
 
     #[test]
