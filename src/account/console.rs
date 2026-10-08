@@ -257,6 +257,10 @@ pub struct CatalogPrice {
     pub input_per_mtok: i64,
     pub output_per_mtok: i64,
     pub cached_input_per_mtok: i64,
+    /// True for models the gateway hides from /v1/models (decision-only).
+    /// Carried so listers can show them from the price catalog instead of
+    /// hardcoding their ids.
+    pub decisions_only: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -2058,6 +2062,7 @@ impl ConsoleClient {
                 input_per_mtok: model.input_per_mtok,
                 output_per_mtok: model.output_per_mtok,
                 cached_input_per_mtok: model.cached_input_per_mtok,
+                decisions_only: model.decisions_only,
             })
             .collect();
         (IdentityResult::Ok, prices, String::new())
