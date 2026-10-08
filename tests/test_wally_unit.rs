@@ -28,3 +28,5 @@ mod paths;
 mod run;
 #[path = "test_wally_unit/shim.rs"]
 mod shim;
+#[path = "test_wally_unit/spinner.rs"]
+mod spinner;

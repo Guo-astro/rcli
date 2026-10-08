@@ -1,5 +1,6 @@
 //! Small process-wide helpers.
 
+pub mod hush;
 pub mod interrupt;
 pub mod term;
 
