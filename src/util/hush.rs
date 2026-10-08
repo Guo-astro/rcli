@@ -27,7 +27,7 @@ impl HushedStdout {
             let saved = libc::dup(libc::STDOUT_FILENO);
             if saved >= 0 {
                 let null = libc::open(
-                    b"/dev/null\0".as_ptr() as *const std::ffi::c_char,
+                    c"/dev/null".as_ptr(),
                     libc::O_WRONLY,
                 );
                 if null >= 0 {
@@ -79,12 +79,14 @@ pub fn mute_stdout_process() {
         let saved = libc::dup(libc::STDOUT_FILENO);
         if saved >= 0 {
             let null =
-                libc::open(b"/dev/null\0".as_ptr() as *const std::ffi::c_char, libc::O_WRONLY);
+                libc::open(c"/dev/null".as_ptr(), libc::O_WRONLY);
             if null >= 0 {
                 libc::dup2(null, libc::STDOUT_FILENO);
                 libc::close(null);
             }
-            std::mem::forget(saved);
+            // `saved` is deliberately never closed: that open descriptor is
+            // what keeps the mute on until the process exits.
+            let _ = saved;
         }
     }
 }
