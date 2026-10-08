@@ -67,8 +67,9 @@ were updated for those two rows only; nothing else about them changed.
 it. `help__decisions` and `help__decide` were re-captured from the Rust binary
 for that option row and example only; nothing else about them changed.
 
-`--image` then learned HEIC (converted to JPEG on macOS), and the same two
-cases were re-captured for that option row only; nothing else changed.
+`--image` then learned HEIC (converted to JPEG on macOS), and later said that
+images go at full size; each time the same two cases were re-captured for that
+option row only; nothing else changed.
 
 Re-capture from a binary (only when behaviour changes on purpose):
 
