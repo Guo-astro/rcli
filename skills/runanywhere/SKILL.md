@@ -92,8 +92,9 @@ wally decisions --input "Checkout is blank" --ask "Is this a bug?"
 wally decide --input-file ticket.txt --choice "Owner=frontend,payments,account"
 ```
 
-`--image FILE` (PNG, JPEG or WebP, up to 8, hosted only) asks the questions
-about images too; a model that does not take them refuses with 400.
+`--image FILE` (PNG, JPEG or WebP, up to 8, hosted only; HEIC is converted to
+JPEG on macOS) asks the questions about images too; a model that does not take
+them refuses with 400.
 
 Use `--json` when another tool needs the raw response. Do not send `eve` (or
 its retired names `pplx-decider-v1` and `qwev`) to `wally run` or a coding
