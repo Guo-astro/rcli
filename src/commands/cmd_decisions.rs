@@ -894,38 +894,25 @@ fn run_local(options: &GlobalOptions, request: &contract::DecisionsRequest, json
         Err(exit_code) => return exit_code,
     };
 
-    let spinner = (!json).then(|| {
-        crate::progress::spinner::Spinner::start(&format!("loading {}", model.model_id))
-    });
-
     // Third-party code inside load/score prints to stdout (the tokenizer
     // fallback); that corrupts --json, so stdout stays muted across both.
-    // Stderr stays live for the spinner and SDK diagnostics.
+    // Stderr stays live for SDK diagnostics.
     let hush = crate::util::hush::HushedStdout::mute();
 
     let loaded = match load_decisions_component(&model) {
         Ok(loaded) => loaded,
         Err(message) => {
             drop(hush);
-            if let Some(spinner) = spinner {
-                spinner.stop();
-            }
             out::error_line(&message);
             return 1;
         }
     };
-    if let Some(spinner) = &spinner {
-        spinner.set_label("scoring");
-    }
 
     let started = Instant::now();
     let response = match score_loaded(&loaded, request) {
         Ok(response) => response,
         Err(message) => {
             drop(hush);
-            if let Some(spinner) = spinner {
-                spinner.stop();
-            }
             out::error_line(&message);
             return 1;
         }
@@ -934,9 +921,6 @@ fn run_local(options: &GlobalOptions, request: &contract::DecisionsRequest, json
     // third-party code that prints, after the last line is already out.
     drop(loaded);
     drop(hush);
-    if let Some(spinner) = spinner {
-        spinner.stop();
-    }
     let latency_ms = started.elapsed().as_millis();
     if json {
         out::result_line(&crate::io::json::dump(&response.to_json()));
