@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 /// SHA-256 of contracts/wally-decisions-public-v1.openapi.json this file was built from.
 pub const CONTRACT_SHA256: &str =
-    "2dedb7959a12921efb82fa0e17bfdd0e78ee1cc21c80a1cc438db1ddcdbd69a7";
+    "d00eb4398ccdd5629fb26a0ec696f22916942ed5b26e029274f669f2ac050eff";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ErrorCode {
@@ -677,6 +677,7 @@ impl DecisionUsage {
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct DecisionsRequest {
+    pub images: Option<Vec<String>>,
     pub input: String,
     pub model: String,
     pub prompt_format_version: Option<i64>,
@@ -690,6 +691,25 @@ impl DecisionsRequest {
             .as_object()
             .ok_or_else(|| "expected a JSON object".to_string())?;
         let mut result = Self::default();
+        match object.get("images") {
+            Some(field) if !field.is_null() => {
+                result.images = Some({
+                    let array = field
+                        .as_array()
+                        .ok_or_else(|| "expected an array".to_string())?;
+                    let mut items = Vec::with_capacity(array.len());
+                    for item in array {
+                        items.push(
+                            item.as_str()
+                                .ok_or_else(|| "expected a string".to_string())?
+                                .to_string(),
+                        );
+                    }
+                    items
+                });
+            }
+            _ => {}
+        }
         match object.get("input") {
             Some(field) if !field.is_null() => {
                 result.input = field
@@ -748,6 +768,16 @@ impl DecisionsRequest {
 
     pub fn to_json(&self) -> Value {
         let mut map = serde_json::Map::new();
+        if let Some(item) = &self.images {
+            map.insert(
+                "images".to_string(),
+                Value::Array(
+                    item.iter()
+                        .map(|item| Value::String(item.clone()))
+                        .collect(),
+                ),
+            );
+        }
         map.insert("input".to_string(), Value::String(self.input.clone()));
         map.insert("model".to_string(), Value::String(self.model.clone()));
         if let Some(item) = &self.prompt_format_version {

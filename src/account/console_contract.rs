@@ -10,7 +10,7 @@ use serde_json::Value;
 
 /// SHA-256 of contracts/wally-cli-v1.openapi.json this file was built from.
 pub const CONTRACT_SHA256: &str =
-    "5cc8fc271c85f10eabe68d7ac49638cf68286e9c2bba41b6d452c92e7a4c6657";
+    "0ee5432eb94e4a85194e059a9a343369d83476edf23b99998bd3bfbdc4dd883e";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ApiErrorCode {
@@ -581,6 +581,7 @@ impl CancelRequestResponse {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CatalogModelResponse {
     pub cached_input_per_mtok: i64,
+    pub decisions_image_input: bool,
     pub decisions_only: bool,
     pub display_name: String,
     pub id: String,
@@ -599,6 +600,14 @@ impl CatalogModelResponse {
                 result.cached_input_per_mtok = field
                     .as_i64()
                     .ok_or_else(|| "expected an integer".to_string())?;
+            }
+            _ => {}
+        }
+        match object.get("decisions_image_input") {
+            Some(field) if !field.is_null() => {
+                result.decisions_image_input = field
+                    .as_bool()
+                    .ok_or_else(|| "expected a boolean".to_string())?;
             }
             _ => {}
         }
@@ -652,6 +661,10 @@ impl CatalogModelResponse {
         map.insert(
             "cached_input_per_mtok".to_string(),
             Value::from(self.cached_input_per_mtok),
+        );
+        map.insert(
+            "decisions_image_input".to_string(),
+            Value::Bool(self.decisions_image_input),
         );
         map.insert(
             "decisions_only".to_string(),

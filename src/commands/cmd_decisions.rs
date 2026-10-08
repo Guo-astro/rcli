@@ -34,6 +34,60 @@ const MAX_BODY_BYTES: usize = 1024 * 1024;
 const CONTRACT: &str = include_str!("../../contracts/wally-decisions-public-v1.openapi.json");
 /// Widest label column in the human rendering; longer labels are cut.
 const LABEL_MAX_CHARS: usize = 32;
+/// The contract's `images`: at most 8, each a base64 data URL of at most
+/// 1,000,000 characters, PNG, JPEG or WebP only.
+const MAX_IMAGES: usize = 8;
+const MAX_IMAGE_URL_CHARS: usize = 1_000_000;
+const IMAGE_URL_PREFIXES: [&str; 3] = [
+    "data:image/png;base64,",
+    "data:image/jpeg;base64,",
+    "data:image/webp;base64,",
+];
+
+fn image_kind(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("png")
+    } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("jpeg")
+    } else if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some("webp")
+    } else {
+        None
+    }
+}
+
+fn base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = (u32::from(chunk[0]) << 16)
+            | (u32::from(*chunk.get(1).unwrap_or(&0)) << 8)
+            | u32::from(*chunk.get(2).unwrap_or(&0));
+        for (i, shift) in [18, 12, 6, 0].into_iter().enumerate() {
+            if i <= chunk.len() {
+                out.push(ALPHABET[(n >> shift) as usize & 63] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
+/// An image file as the data URL the contract takes, its type read from its
+/// bytes rather than its name.
+fn image_data_url(path: &str) -> Result<String, String> {
+    let bytes = std::fs::read(path).map_err(|error| format!("could not read {path}: {error}"))?;
+    let kind =
+        image_kind(&bytes).ok_or_else(|| format!("{path} is not a PNG, JPEG or WebP image"))?;
+    let url = format!("data:image/{kind};base64,{}", base64(&bytes));
+    if url.len() > MAX_IMAGE_URL_CHARS {
+        return Err(format!(
+            "{path} is too large: an image may be at most about 730 KiB ({MAX_IMAGE_URL_CHARS} base64 characters)"
+        ));
+    }
+    Ok(url)
+}
 
 fn read_stdin() -> Result<String, String> {
     let mut value = String::new();
@@ -137,6 +191,26 @@ pub(crate) fn validate(request: &contract::DecisionsRequest) -> Result<(), Strin
             return Err(format!("question {id} needs at least two labels"));
         }
     }
+    if let Some(images) = &request.images {
+        if !(1..=MAX_IMAGES).contains(&images.len()) {
+            return Err(format!("provide 1 to {MAX_IMAGES} images"));
+        }
+        for (i, image) in images.iter().enumerate() {
+            if !IMAGE_URL_PREFIXES
+                .iter()
+                .any(|prefix| image.starts_with(prefix))
+            {
+                return Err(format!(
+                    "images[{i}] must be a base64 PNG, JPEG or WebP data URL"
+                ));
+            }
+            if image.len() > MAX_IMAGE_URL_CHARS {
+                return Err(format!(
+                    "images[{i}] may be at most {MAX_IMAGE_URL_CHARS} characters"
+                ));
+            }
+        }
+    }
     let bytes = crate::io::json::dump(&request.to_json());
     if bytes.len() > MAX_BODY_BYTES {
         return Err("request body exceeds 1 MiB".to_string());
@@ -170,6 +244,7 @@ fn build_request(p: &crate::cli::Parsed) -> Result<contract::DecisionsRequest, S
             "--temperature",
             "--model",
             "--route",
+            "--image",
         ]
         .into_iter()
         .filter(|name| p.is_set(name))
@@ -263,6 +338,14 @@ fn build_request(p: &crate::cli::Parsed) -> Result<contract::DecisionsRequest, S
                 .to_string(),
         );
     }
+    let paths = p.get_strs("--image");
+    if paths.len() > MAX_IMAGES {
+        return Err(format!("provide at most {MAX_IMAGES} --image files"));
+    }
+    let images = paths
+        .iter()
+        .map(|path| image_data_url(path))
+        .collect::<Result<Vec<_>, _>>()?;
     let request = contract::DecisionsRequest {
         model: p
             .get_str("--model")
@@ -271,6 +354,7 @@ fn build_request(p: &crate::cli::Parsed) -> Result<contract::DecisionsRequest, S
         questions,
         temperature: p.get_f64("--temperature"),
         prompt_format_version: None,
+        images: (!images.is_empty()).then_some(images),
     };
     validate(&request)?;
     Ok(request)
@@ -958,6 +1042,10 @@ fn run(p: &crate::cli::Parsed, options: &GlobalOptions, json: bool) -> i32 {
             return 2;
         }
     };
+    if transport == Transport::Local && request.images.is_some() {
+        out::error_line("images are scored on the cloud only: drop --local");
+        return 2;
+    }
     if let Some(route) = forced_route {
         if let Err(error) = preferences::set_decisions_route(route.name()) {
             out::error_line(&error);
@@ -967,8 +1055,13 @@ fn run(p: &crate::cli::Parsed, options: &GlobalOptions, json: bool) -> i32 {
     }
     // No flags and no model is the first-run shape: follow the saved route,
     // ask once when there is none, and stay on today's cloud default where
-    // no answer can come (a pipe) or nothing local can run.
-    if transport == Transport::Auto && !p.is_set("--model") && !p.is_set("--request") {
+    // no answer can come (a pipe) or nothing local can run. Images are
+    // cloud-only, so they never ask.
+    if transport == Transport::Auto
+        && !p.is_set("--model")
+        && !p.is_set("--request")
+        && request.images.is_none()
+    {
         let route = match forced_route.or_else(preferences::saved_decisions_route) {
             Some(saved) => {
                 out::status_line(&format!("using saved decisions route: {}", saved.name()));
@@ -1034,6 +1127,10 @@ fn run(p: &crate::cli::Parsed, options: &GlobalOptions, json: bool) -> i32 {
     if local {
         if p.is_set("--no-retry") {
             out::error_line("--no-retry is a cloud-only flag");
+            return 2;
+        }
+        if request.images.is_some() {
+            out::error_line("images are scored on the cloud only: drop --local, or add --cloud");
             return 2;
         }
         // The local path promises no network; bootstrap must not run the
@@ -1167,6 +1264,12 @@ pub fn register_decisions(app: &mut App) {
         "Complete DecisionsRequest JSON file (- for stdin)",
     );
     cmd.add_option(
+        "--image",
+        ValueType::Text,
+        "PNG, JPEG or WebP file every question is about (repeatable, up to 8; cloud only)",
+    )
+    .multi();
+    cmd.add_option(
         "--temperature",
         ValueType::Float,
         "Probability temperature (>0, at most 100)",
@@ -1199,6 +1302,10 @@ pub fn register_decisions(app: &mut App) {
             "wally decisions --local -m clef-flash-9b --input 'Checkout is blank' --ask 'Is this a bug?'",
             "",
         ),
+        Example::new(
+            "wally decisions --image receipt.png --input 'Expense claim' --ask 'Is the total over $100?'",
+            "",
+        ),
     ]));
     cmd.callback(|p, global| run(p, global, p.flag("--json") || global.json));
 }
@@ -1227,6 +1334,87 @@ mod tests {
         let mut invalid = request;
         invalid.temperature = Some(0.0);
         assert!(validate(&invalid).is_err());
+    }
+
+    #[test]
+    fn base64_matches_the_standard_alphabet_and_padding() {
+        for (raw, encoded) in [
+            (&b""[..], ""),
+            (b"f", "Zg=="),
+            (b"fo", "Zm8="),
+            (b"foo", "Zm9v"),
+            (b"foobar", "Zm9vYmFy"),
+            (&[0xFB, 0xFF, 0xBF][..], "+/+/"),
+        ] {
+            assert_eq!(base64(raw), encoded);
+        }
+    }
+
+    #[test]
+    fn an_image_type_is_read_from_its_bytes() {
+        assert_eq!(image_kind(b"\x89PNG\r\n\x1a\nrest"), Some("png"));
+        assert_eq!(image_kind(&[0xFF, 0xD8, 0xFF, 0xE0]), Some("jpeg"));
+        assert_eq!(image_kind(b"RIFF\0\0\0\0WEBPVP8 "), Some("webp"));
+        assert_eq!(image_kind(b"GIF89a"), None);
+        assert_eq!(image_kind(b"RIFF\0\0\0\0WAVE"), None);
+    }
+
+    #[test]
+    fn an_image_file_becomes_a_data_url_and_anything_else_is_refused() {
+        let dir = std::env::temp_dir().join(format!("wally-image-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let png = dir.join("a.png");
+        std::fs::write(&png, b"\x89PNG\r\n\x1a\n").unwrap();
+        assert_eq!(
+            image_data_url(png.to_str().unwrap()).unwrap(),
+            "data:image/png;base64,iVBORw0KGgo="
+        );
+        let gif = dir.join("a.gif");
+        std::fs::write(&gif, b"GIF89a").unwrap();
+        assert!(image_data_url(gif.to_str().unwrap())
+            .unwrap_err()
+            .contains("not a PNG, JPEG or WebP"));
+        let big = dir.join("big.png");
+        let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+        bytes.resize(750_000, 0);
+        std::fs::write(&big, bytes).unwrap();
+        assert!(image_data_url(big.to_str().unwrap())
+            .unwrap_err()
+            .contains("too large"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn images_are_held_to_the_contract() {
+        let request = |images: Option<Vec<String>>| contract::DecisionsRequest {
+            model: DEFAULT_MODEL.to_string(),
+            input: "receipt".to_string(),
+            questions: vec![contract::DecisionQuestion::YesNoQuestion(
+                contract::YesNoQuestion {
+                    id: "q1".to_string(),
+                    question: "Over $100?".to_string(),
+                    r#type: "yes_no".to_string(),
+                    ..Default::default()
+                },
+            )],
+            images,
+            ..Default::default()
+        };
+        let url = "data:image/png;base64,iVBORw0KGgo=".to_string();
+        assert!(validate(&request(None)).is_ok());
+        assert!(validate(&request(Some(vec![url.clone(); 8]))).is_ok());
+        assert!(validate(&request(Some(vec![]))).is_err());
+        assert!(validate(&request(Some(vec![url.clone(); 9]))).is_err());
+        assert!(validate(&request(Some(
+            vec!["https://example.com/a.png".to_string()]
+        )))
+        .is_err());
+        assert!(validate(&request(Some(vec![
+            "data:image/gif;base64,R0lG".to_string()
+        ])))
+        .is_err());
+        let long = format!("data:image/png;base64,{}", "A".repeat(MAX_IMAGE_URL_CHARS));
+        assert!(validate(&request(Some(vec![long]))).is_err());
     }
 
     #[test]

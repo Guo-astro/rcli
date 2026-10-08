@@ -240,6 +240,35 @@ def main():
             request_file.write_text(json.dumps(custom))
             result = invoke(binary, env, "decisions", "--request", str(request_file))
             assert result.returncode == 0 and "Route?" in result.stdout
+
+            # Images: read from the file's bytes, sent as data URLs in order,
+            # and refused before anything is sent when they cannot be.
+            png = pathlib.Path(profile, "receipt.png")
+            png.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\0" * 16)
+            webp = pathlib.Path(profile, "photo.bin")
+            webp.write_bytes(b"RIFF\0\0\0\0WEBPVP8 " + b"\0" * 8)
+            pictured = invoke(
+                binary, env, "decisions", "--input", "images", "--ask", "Okay?",
+                "--image", str(png), "--image", str(webp),
+            )
+            assert pictured.returncode == 0, pictured.stderr
+            images = ConsoleHandler.requests[-1][2]["images"]
+            assert [image.split(",", 1)[0] for image in images] == [
+                "data:image/png;base64", "data:image/webp;base64",
+            ], images
+            before = len(ConsoleHandler.requests)
+            gif = pathlib.Path(profile, "a.gif")
+            gif.write_bytes(b"GIF89a")
+            for args, message in (
+                (["--image", str(gif)], "not a PNG, JPEG or WebP"),
+                (["--image", str(png), "--local"], "cloud only"),
+                (["--image", str(png)] * 9, "at most 8"),
+            ):
+                refused = invoke(binary, env, "decisions", "--input", "x", "--ask", "Okay?", *args)
+                assert refused.returncode == 2 and message in refused.stderr, (args, refused.stderr)
+            refused = invoke(binary, env, "decisions", "--request", str(request_file), "--image", str(png))
+            assert refused.returncode == 2 and "--image" in refused.stderr, refused.stderr
+            assert len(ConsoleHandler.requests) == before, "a refused image request was sent"
     finally:
         server.shutdown()
         server.server_close()

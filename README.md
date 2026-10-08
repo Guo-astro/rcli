@@ -111,7 +111,11 @@ wally decisions --input "Checkout is blank after Pay" \
 ```
 
 Use `--json` for the raw API response, or `--request FILE` for the complete
-typed request shape. Decision models are refused by `wally run` and the coding
+typed request shape. `--image FILE` (PNG, JPEG or WebP, up to 8, cloud only)
+asks every question about the images too; each image is billed as prompt
+tokens once per question, and a model that does not take images refuses the
+request before anything is billed. Images over 4 MP are refused for now: scale
+them to 1920 px on the longest side, which scores and costs the same. Decision models are refused by `wally run` and the coding
 tools, which point back here.
 
 Eve is also runnable on this machine. Pull a local checkpoint and point
