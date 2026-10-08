@@ -912,6 +912,8 @@ fn run_local(options: &GlobalOptions, request: &contract::DecisionsRequest, json
     let response = match score_loaded(&loaded, request) {
         Ok(response) => response,
         Err(message) => {
+            // Teardown prints too: destroy the component while muted.
+            drop(loaded);
             drop(hush);
             out::error_line(&message);
             return 1;

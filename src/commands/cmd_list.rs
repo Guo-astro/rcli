@@ -254,8 +254,9 @@ fn cloud_models() -> Result<CloudModels, String> {
             // Decision-only models never appear above; the price catalog
             // names them. A failed price lookup is not fatal: the rows just
             // stay missing, exactly as before.
-            if let Ok(prices) = session.call(|client, url, token| client.fetch_catalog(url, token))
-            {
+            if let Ok(prices) = session.call(|client, url, token| {
+                client.fetch_catalog_within(url, token, CLOUD_LOOKUP_TIMEOUT_MS)
+            }) {
                 for price in &prices {
                     if price.decisions_only
                         && !price.id.is_empty()

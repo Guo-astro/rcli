@@ -8,7 +8,8 @@
 .deps/
 
 # Fetched prebuilt SDK kit (scripts/build/fetch-kit.sh <platform> <dest>).
-# Several GB, machine-local.
+# Several GB, machine-local. test-e2e.sh defaults to <repo>/kit.
+/kit/
 /.kit-*/
 
 # SwiftPM and xcodebuild output for the Apple entry point. 7 GB of checkouts
