@@ -7,6 +7,10 @@
 # Shallow SDK checkout used by CI to link the Swift MLX host.
 .deps/
 
+# Fetched prebuilt SDK kit (scripts/build/fetch-kit.sh <platform> <dest>).
+# Several GB, machine-local.
+/.kit-*/
+
 # SwiftPM and xcodebuild output for the Apple entry point. 7 GB of checkouts
 # and object files: worth naming explicitly, because `git add -A` in this repo
 # would otherwise try to commit all of it.
