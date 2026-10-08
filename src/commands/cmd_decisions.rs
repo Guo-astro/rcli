@@ -82,14 +82,31 @@ fn base64(bytes: &[u8]) -> String {
 
 /// An image file as the data URL the contract takes, at its full size, its
 /// type read from its bytes rather than its name. A HEIC photo is sent as a
-/// JPEG made from it.
+/// JPEG made from it. The gateway judges every image's size, except one whose
+/// base64 alone is past the 24 MiB a request with images may be, which is
+/// refused here before it is read.
 fn image_data_url(path: &str) -> Result<String, String> {
+    let refuse_large = |size: u64| {
+        let chars = size.div_ceil(3) * 4;
+        if chars > MAX_IMAGE_BODY_BYTES as u64 {
+            return Err(format!(
+                "{path} is too large to send: as base64 it is {:.1} MiB, over the 24 MiB a request with images may be",
+                chars as f64 / 1_048_576.0
+            ));
+        }
+        Ok(())
+    };
+    let size = std::fs::metadata(path)
+        .map_err(|error| format!("could not read {path}: {error}"))?
+        .len();
+    refuse_large(size)?;
     let mut bytes =
         std::fs::read(path).map_err(|error| format!("could not read {path}: {error}"))?;
     if heic::is_heif(&bytes) {
         bytes = heic::to_jpeg(&bytes).map_err(|reason| {
             format!("{path} is a HEIC photo that could not be converted to JPEG: {reason}")
         })?;
+        refuse_large(bytes.len() as u64)?;
     }
     let kind = image_kind(&bytes)
         .ok_or_else(|| format!("{path} is not a PNG, JPEG, WebP or HEIC image"))?;
@@ -1393,6 +1410,36 @@ mod tests {
             image_data_url(big.to_str().unwrap()).unwrap(),
             format!("data:image/png;base64,{}", base64(&bytes))
         );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn an_image_whose_base64_alone_is_past_24_mib_is_refused_unread() {
+        let dir = std::env::temp_dir().join(format!("wally-image-cap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // 18 MiB is the most whose base64 (four characters for three bytes)
+        // fits; past it the file is refused on its length, without reading
+        // it (this one is sparse and holds no image at all).
+        let limit = (MAX_IMAGE_BODY_BYTES / 4 * 3) as u64;
+        let pano = dir.join("pano.jpg");
+        std::fs::File::create(&pano)
+            .unwrap()
+            .set_len(limit + 1)
+            .unwrap();
+        assert_eq!(
+            image_data_url(pano.to_str().unwrap()).unwrap_err(),
+            format!(
+                "{} is too large to send: as base64 it is 24.0 MiB, over the 24 MiB a request with images may be",
+                pano.display()
+            )
+        );
+        // At the limit it is read, and typed from its bytes.
+        let mut at = vec![0xFF, 0xD8, 0xFF, 0xE0];
+        at.resize(limit as usize, 0);
+        std::fs::write(&pano, &at).unwrap();
+        assert!(image_data_url(pano.to_str().unwrap())
+            .unwrap()
+            .starts_with("data:image/jpeg;base64,/9j/4A"));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
