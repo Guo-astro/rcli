@@ -219,9 +219,16 @@ fn settle_row_id_and_size(row: &mut GroupedRow) {
 // fallback.
 const CLOUD_LOOKUP_TIMEOUT_MS: i32 = 3_000;
 
+/// One hosted row. `decisions_only` marks models the gateway hides from
+/// /v1/models; they arrive via the price catalog instead, never hardcoded.
+struct CloudRow {
+    id: String,
+    decisions_only: bool,
+}
+
 /// Where the cloud rows came from.
 enum CloudModels {
-    Live(Vec<String>),
+    Live(Vec<CloudRow>),
     /// The console could not be reached; these are the ids the last
     /// successful lookup saved (`account::cached_model_ids`).
     Cached(Vec<String>),
@@ -234,13 +241,36 @@ fn cloud_models() -> Result<CloudModels, String> {
     match session
         .call(|client, url, token| client.fetch_models_within(url, token, CLOUD_LOOKUP_TIMEOUT_MS))
     {
-        Ok(models) => Ok(CloudModels::Live(
-            models
+        Ok(models) => {
+            let mut rows: Vec<CloudRow> = models
                 .into_iter()
                 .map(|model| model.id)
                 .filter(|id| !id.is_empty())
-                .collect(),
-        )),
+                .map(|id| CloudRow {
+                    id,
+                    decisions_only: false,
+                })
+                .collect();
+            // Decision-only models never appear above; the price catalog
+            // names them. A failed price lookup is not fatal: the rows just
+            // stay missing, exactly as before.
+            if let Ok(prices) = session.call(|client, url, token| {
+                client.fetch_catalog_within(url, token, CLOUD_LOOKUP_TIMEOUT_MS)
+            }) {
+                for price in &prices {
+                    if price.decisions_only
+                        && !price.id.is_empty()
+                        && !rows.iter().any(|row| row.id == price.id)
+                    {
+                        rows.push(CloudRow {
+                            id: price.id.clone(),
+                            decisions_only: true,
+                        });
+                    }
+                }
+            }
+            Ok(CloudModels::Live(rows))
+        }
         Err(reason) => {
             let cached = crate::account::cached_model_ids();
             if cached.is_empty() {
@@ -345,17 +375,23 @@ fn run_list(options: &GlobalOptions, scope: Scope) -> i32 {
     // Under --all a failure to reach the cloud never fails the local list; it
     // is one line on stderr saying why they are missing. Under --cloud the
     // cloud is all that was asked for, so the same failure is the error.
-    let mut cloud_ids: Vec<String> = Vec::new();
+    let mut cloud_ids: Vec<CloudRow> = Vec::new();
     if scope.cloud_rows() {
         match cloud_models() {
-            Ok(CloudModels::Live(ids)) => cloud_ids = ids,
+            Ok(CloudModels::Live(rows)) => cloud_ids = rows,
             Ok(CloudModels::Cached(ids)) => {
                 if !options.json {
                     out::status_line(
                         "could not reach Wally Cloud; cloud models are from the last time wally did",
                     );
                 }
-                cloud_ids = ids;
+                cloud_ids = ids
+                    .into_iter()
+                    .map(|id| CloudRow {
+                        id,
+                        decisions_only: false,
+                    })
+                    .collect();
             }
             Err(reason) if scope == Scope::Cloud => {
                 out::error_line(&format!("could not list cloud models: {reason}"));
@@ -388,11 +424,18 @@ fn run_list(options: &GlobalOptions, scope: Scope) -> i32 {
                 .field_bool("cloud", false)
                 .end_object();
         }
-        for id in &cloud_ids {
+        for row in &cloud_ids {
             json.begin_array_object()
-                .field_str("id", id)
-                .field_str("name", id)
-                .field_str("modality", "llm")
+                .field_str("id", &row.id)
+                .field_str("name", &row.id)
+                .field_str(
+                    "modality",
+                    if row.decisions_only {
+                        "decision"
+                    } else {
+                        "llm"
+                    },
+                )
                 .field_str("backend", "cloud")
                 .field_i64("size_bytes", 0)
                 .field_bool("downloaded", false)
@@ -433,10 +476,15 @@ fn run_list(options: &GlobalOptions, scope: Scope) -> i32 {
     }
 
     let tag = cloud_tag(options.no_color);
-    for id in &cloud_ids {
+    for row in &cloud_ids {
         rows.push(vec![
-            id.clone(),
-            "llm".to_string(),
+            row.id.clone(),
+            if row.decisions_only {
+                "decision"
+            } else {
+                "llm"
+            }
+            .to_string(),
             "cloud".to_string(),
             "-".to_string(),
             "-".to_string(),

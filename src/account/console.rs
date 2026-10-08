@@ -257,6 +257,10 @@ pub struct CatalogPrice {
     pub input_per_mtok: i64,
     pub output_per_mtok: i64,
     pub cached_input_per_mtok: i64,
+    /// True for models the gateway hides from /v1/models (decision-only).
+    /// Carried so listers can show them from the price catalog instead of
+    /// hardcoding their ids.
+    pub decisions_only: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -2000,6 +2004,17 @@ impl ConsoleClient {
         console_url: &str,
         access_token: &str,
     ) -> (IdentityResult, Vec<CatalogPrice>, String) {
+        self.fetch_catalog_within(console_url, access_token, 0)
+    }
+
+    /// `fetch_catalog` bounded to `timeout_ms` in all (0: the transport's
+    /// defaults), for a caller that has something else to show if it fails.
+    pub fn fetch_catalog_within(
+        &self,
+        console_url: &str,
+        access_token: &str,
+        timeout_ms: i32,
+    ) -> (IdentityResult, Vec<CatalogPrice>, String) {
         if !super::session_token_is_safe(access_token) {
             return (
                 IdentityResult::Failed,
@@ -2016,7 +2031,7 @@ impl ConsoleClient {
             url: format!("{origin}/v1/models/catalog"),
             body: String::new(),
             bearer_token: access_token.to_string(),
-            timeout_ms: 0,
+            timeout_ms,
         };
         let response = match self.send(request) {
             Ok(response) => response,
@@ -2058,6 +2073,7 @@ impl ConsoleClient {
                 input_per_mtok: model.input_per_mtok,
                 output_per_mtok: model.output_per_mtok,
                 cached_input_per_mtok: model.cached_input_per_mtok,
+                decisions_only: model.decisions_only,
             })
             .collect();
         (IdentityResult::Ok, prices, String::new())

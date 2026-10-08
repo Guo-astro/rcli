@@ -2504,10 +2504,10 @@ const SHERPA_SUPERTONIC_V3_FILES: &[CatalogFile] = &[
 // checkpoint, expressed as a file list so it registers through the same
 // category-preserving path as the MLX row.
 const CLEF_FLASH_GGUF_FILES: &[CatalogFile] = &[CatalogFile {
-    url: "https://huggingface.co/ggml-org/Clef-Flash-GGUF/resolve/main/Clef-Flash-Q4_K_M.gguf",
+    url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/main/gguf/Clef-Flash-Q4_K_M.gguf",
     filename: "Clef-Flash-Q4_K_M.gguf",
     required: true,
-    size_bytes: 6486448192,
+    size_bytes: 6486448288,
     checksum_sha256: None,
 }];
 
@@ -2516,77 +2516,77 @@ const CLEF_FLASH_GGUF_FILES: &[CatalogFile] = &[CatalogFile {
 // tokenizer + the joint-head config and weights).
 const CLEF_FLASH_MLX_4BIT_FILES: &[CatalogFile] = &[
     CatalogFile {
-        url: "https://huggingface.co/mlx-community/clef-flash-4bit/resolve/main/chat_template.jinja",
+        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/main/mlx/chat_template.jinja",
         filename: "chat_template.jinja",
         required: false,
         size_bytes: 7756,
         checksum_sha256: None,
     },
     CatalogFile {
-        url: "https://huggingface.co/mlx-community/clef-flash-4bit/resolve/main/config.json",
+        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/main/mlx/config.json",
         filename: "config.json",
         required: true,
         size_bytes: 3722,
         checksum_sha256: None,
     },
     CatalogFile {
-        url: "https://huggingface.co/mlx-community/clef-flash-4bit/resolve/main/generation_config.json",
+        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/main/mlx/generation_config.json",
         filename: "generation_config.json",
         required: false,
         size_bytes: 116,
         checksum_sha256: None,
     },
     CatalogFile {
-        url: "https://huggingface.co/mlx-community/clef-flash-4bit/resolve/main/joint_head.safetensors",
+        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/main/mlx/joint_head.safetensors",
         filename: "joint_head.safetensors",
         required: true,
         size_bytes: 243538016,
         checksum_sha256: None,
     },
     CatalogFile {
-        url: "https://huggingface.co/mlx-community/clef-flash-4bit/resolve/main/joint_head_config.json",
+        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/main/mlx/joint_head_config.json",
         filename: "joint_head_config.json",
         required: true,
         size_bytes: 119,
         checksum_sha256: None,
     },
     CatalogFile {
-        url: "https://huggingface.co/mlx-community/clef-flash-4bit/resolve/main/model-00001-of-00002.safetensors",
+        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/main/mlx/model-00001-of-00002.safetensors",
         filename: "model-00001-of-00002.safetensors",
         required: true,
         size_bytes: 5349769710,
         checksum_sha256: None,
     },
     CatalogFile {
-        url: "https://huggingface.co/mlx-community/clef-flash-4bit/resolve/main/model-00002-of-00002.safetensors",
+        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/main/mlx/model-00002-of-00002.safetensors",
         filename: "model-00002-of-00002.safetensors",
         required: true,
         size_bytes: 600449850,
         checksum_sha256: None,
     },
     CatalogFile {
-        url: "https://huggingface.co/mlx-community/clef-flash-4bit/resolve/main/model.safetensors.index.json",
+        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/main/mlx/model.safetensors.index.json",
         filename: "model.safetensors.index.json",
         required: true,
         size_bytes: 123592,
         checksum_sha256: None,
     },
     CatalogFile {
-        url: "https://huggingface.co/mlx-community/clef-flash-4bit/resolve/main/processor_config.json",
+        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/main/mlx/processor_config.json",
         filename: "processor_config.json",
         required: false,
         size_bytes: 1191,
         checksum_sha256: None,
     },
     CatalogFile {
-        url: "https://huggingface.co/mlx-community/clef-flash-4bit/resolve/main/tokenizer.json",
+        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/main/mlx/tokenizer.json",
         filename: "tokenizer.json",
         required: true,
         size_bytes: 19989339,
         checksum_sha256: None,
     },
     CatalogFile {
-        url: "https://huggingface.co/mlx-community/clef-flash-4bit/resolve/main/tokenizer_config.json",
+        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/main/mlx/tokenizer_config.json",
         filename: "tokenizer_config.json",
         required: true,
         size_bytes: 1190,
@@ -4515,7 +4515,7 @@ const CATALOG: &[CatalogEntry] = &[
         // through, the same way the MLX row registers.
         url: None,
         files: CLEF_FLASH_GGUF_FILES,
-        download_size_bytes: 6486448192,
+        download_size_bytes: 6486448288,
         context_length: 0,
         supports_thinking: false,
         memory_required_bytes: 0,

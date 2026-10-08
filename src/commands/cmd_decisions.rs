@@ -978,9 +978,15 @@ fn run_local(options: &GlobalOptions, request: &contract::DecisionsRequest, json
         Err(exit_code) => return exit_code,
     };
 
+    // Third-party code inside load/score prints to stdout (the tokenizer
+    // fallback); that corrupts --json, so stdout stays muted across both.
+    // Stderr stays live for SDK diagnostics.
+    let hush = crate::util::hush::HushedStdout::mute();
+
     let loaded = match load_decisions_component(&model) {
         Ok(loaded) => loaded,
         Err(message) => {
+            drop(hush);
             out::error_line(&message);
             return 1;
         }
@@ -990,16 +996,26 @@ fn run_local(options: &GlobalOptions, request: &contract::DecisionsRequest, json
     let response = match score_loaded(&loaded, request) {
         Ok(response) => response,
         Err(message) => {
+            // Teardown prints too: destroy the component while muted.
+            drop(loaded);
+            drop(hush);
             out::error_line(&message);
             return 1;
         }
     };
+    // Unload inside the muted window too: session teardown re-enters
+    // third-party code that prints, after the last line is already out.
+    drop(loaded);
+    drop(hush);
     let latency_ms = started.elapsed().as_millis();
     if json {
         out::result_line(&crate::io::json::dump(&response.to_json()));
     } else {
         render_human(request, &response, false);
     }
+    // The fallback print also fires during runtime teardown, after the last
+    // line is out. Mute the tail: nothing else prints to stdout past here.
+    crate::util::hush::mute_stdout_process();
     out::status_line(&format!(
         "{} · {} tokens · local · {}ms",
         response.model, response.usage.total_tokens, latency_ms
