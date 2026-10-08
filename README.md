@@ -115,8 +115,11 @@ typed request shape. `--image FILE` (PNG, JPEG or WebP, up to 8, cloud only;
 on macOS a HEIC photo is sent as a full-size JPEG, upright and without its
 EXIF or GPS) asks every question about the images too; each image is billed as prompt
 tokens once per question, and a model that does not take images refuses the
-request before anything is billed. Images over 4 MP are refused for now: scale
-them to 1920 px on the longest side, which scores and costs the same. Decision models are refused by `wally run` and the coding
+request before anything is billed. Images are sent at full size: the service
+shrinks each to what the model sees, so a larger photo scores and costs the
+same. It takes a request of up to 24 MiB with its images (1 MiB outside them),
+and an image of up to 64 MP as JPEG or 24 MP as PNG or WebP; past those it
+refuses with HTTP 400 and says which limit. Decision models are refused by `wally run` and the coding
 tools, which point back here.
 
 Eve is also runnable on this machine. Pull a local checkpoint and point
