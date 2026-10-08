@@ -5,6 +5,7 @@ rather than a credentials file written here: Windows keeps the credential in a
 DPAPI-sealed credentials.dat that only the CLI can write, so a seeded
 credentials.json is never read there."""
 
+import base64
 import json
 import os
 import pathlib
@@ -100,6 +101,19 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         if marker == "too-long":
             self.reply(400, {"error": {"code": "bad_request",
                                       "message": "question q1 is 9001 tokens; the model takes 8192",
+                                      "type": "invalid_request_error"}})
+            return
+        # The gateway's refusals of images it will not take (InferenceInfra
+        # #3453): this CLI no longer checks image sizes, so these must reach
+        # the person as written.
+        if marker == "image-too-big":
+            self.reply(400, {"error": {"code": "bad_request", "param": "images",
+                                      "message": "images[0] is 9000x8000, over 64,000,000 pixels: scale it below that",
+                                      "type": "invalid_request_error"}})
+            return
+        if marker == "body-too-big":
+            self.reply(400, {"error": {"code": "payload_too_large",
+                                      "message": "The request body is larger than 25165824 bytes, the most a decision with images may be.",
                                       "type": "invalid_request_error"}})
             return
         if marker == "forbidden":
@@ -273,6 +287,29 @@ def main():
                 assert photographed.returncode == 2, photographed.stderr
                 assert "HEIC photo" in photographed.stderr and "macOS only" in photographed.stderr
                 assert len(ConsoleHandler.requests) == before, "a refused HEIC request was sent"
+
+            # Full size: a photo goes byte for byte, and only the gateway
+            # judges its size, in its own words.
+            photo = pathlib.Path(profile, "photo.jpg")
+            photo.write_bytes(b"\xff\xd8\xff\xe0" + b"\x07" * 3_000_000)
+            sent = invoke(binary, env, "decisions", "--input", "full", "--ask", "Okay?", "--image", str(photo))
+            assert sent.returncode == 0, sent.stderr
+            images = ConsoleHandler.requests[-1][2]["images"]
+            assert images == ["data:image/jpeg;base64," + base64.b64encode(photo.read_bytes()).decode()]
+            for marker, message in (
+                ("image-too-big", "over 64,000,000 pixels"),
+                ("body-too-big", "larger than 25165824 bytes"),
+            ):
+                refused = invoke(binary, env, "decisions", "--input", marker, "--ask", "Okay?", "--image", str(png))
+                assert refused.returncode == 1 and message in refused.stderr, (marker, refused.stderr)
+
+            # A HEIC cut short is refused before anything is sent, everywhere.
+            cut = pathlib.Path(profile, "IMG_0002.HEIC")
+            cut.write_bytes((FIXTURES / "quadrants-grid.heic").read_bytes()[:-1])
+            before = len(ConsoleHandler.requests)
+            refused = invoke(binary, env, "decisions", "--input", "cut", "--ask", "Okay?", "--image", str(cut))
+            assert refused.returncode == 2 and "incomplete or damaged" in refused.stderr, refused.stderr
+            assert len(ConsoleHandler.requests) == before, "a truncated HEIC was sent"
 
             before = len(ConsoleHandler.requests)
             gif = pathlib.Path(profile, "a.gif")
