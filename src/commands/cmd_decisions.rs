@@ -22,6 +22,7 @@ use crate::cli::{App, ValueType};
 use crate::cli_formatter::{examples_footer, Example};
 use crate::commands::model_setup::ensure_model_ready;
 use crate::config::preferences::{self, DecisionsRoute};
+use crate::io::heic;
 use crate::io::output as out;
 use crate::io::proto::{parse_proto_buffer, serialize, v1, ProtoBuffer};
 use crate::sys;
@@ -75,15 +76,27 @@ fn base64(bytes: &[u8]) -> String {
 }
 
 /// An image file as the data URL the contract takes, its type read from its
-/// bytes rather than its name.
+/// bytes rather than its name. A HEIC photo is sent as a JPEG made from it.
 fn image_data_url(path: &str) -> Result<String, String> {
-    let bytes = std::fs::read(path).map_err(|error| format!("could not read {path}: {error}"))?;
-    let kind =
-        image_kind(&bytes).ok_or_else(|| format!("{path} is not a PNG, JPEG or WebP image"))?;
+    let mut bytes =
+        std::fs::read(path).map_err(|error| format!("could not read {path}: {error}"))?;
+    let converted = heic::is_heif(&bytes);
+    if converted {
+        bytes = heic::to_jpeg(&bytes).map_err(|reason| {
+            format!("{path} is a HEIC photo that could not be converted to JPEG: {reason}")
+        })?;
+    }
+    let kind = image_kind(&bytes)
+        .ok_or_else(|| format!("{path} is not a PNG, JPEG, WebP or HEIC image"))?;
     let url = format!("data:image/{kind};base64,{}", base64(&bytes));
     if url.len() > MAX_IMAGE_URL_CHARS {
+        let what = if converted {
+            format!(" as JPEG ({} KiB)", bytes.len() / 1024)
+        } else {
+            String::new()
+        };
         return Err(format!(
-            "{path} is too large: an image may be at most about 730 KiB ({MAX_IMAGE_URL_CHARS} base64 characters)"
+            "{path} is too large{what}: an image may be at most about 730 KiB ({MAX_IMAGE_URL_CHARS} base64 characters)"
         ));
     }
     Ok(url)
@@ -1266,7 +1279,7 @@ pub fn register_decisions(app: &mut App) {
     cmd.add_option(
         "--image",
         ValueType::Text,
-        "PNG, JPEG or WebP file every question is about (repeatable, up to 8; cloud only)",
+        "PNG, JPEG, WebP or HEIC file every question is about (repeatable, up to 8; cloud only; HEIC needs macOS)",
     )
     .multi();
     cmd.add_option(
@@ -1373,7 +1386,7 @@ mod tests {
         std::fs::write(&gif, b"GIF89a").unwrap();
         assert!(image_data_url(gif.to_str().unwrap())
             .unwrap_err()
-            .contains("not a PNG, JPEG or WebP"));
+            .contains("not a PNG, JPEG, WebP or HEIC"));
         let big = dir.join("big.png");
         let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
         bytes.resize(750_000, 0);
@@ -1381,6 +1394,37 @@ mod tests {
         assert!(image_data_url(big.to_str().unwrap())
             .unwrap_err()
             .contains("too large"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_heic_photo_is_sent_as_jpeg_whatever_its_name() {
+        let dir = std::env::temp_dir().join(format!("wally-heic-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let photo = dir.join("IMG_0001.jpg");
+        std::fs::write(
+            &photo,
+            include_bytes!("../../tests/fixtures/quadrants-orientation-6-gps.heic"),
+        )
+        .unwrap();
+        let sent = image_data_url(photo.to_str().unwrap());
+        if cfg!(target_os = "macos") {
+            assert!(sent.unwrap().starts_with("data:image/jpeg;base64,/9j/"));
+        } else {
+            let error = sent.unwrap_err();
+            assert!(error.contains("IMG_0001.jpg is a HEIC photo"), "{error}");
+            assert!(error.contains("macOS only"), "{error}");
+        }
+
+        let broken = dir.join("broken.heic");
+        let mut bytes = b"\0\0\0\x18ftypheic\0\0\0\0mif1heic".to_vec();
+        bytes.resize(256, 0);
+        std::fs::write(&broken, bytes).unwrap();
+        let error = image_data_url(broken.to_str().unwrap()).unwrap_err();
+        assert!(
+            error.contains("broken.heic is a HEIC photo that could not be converted to JPEG"),
+            "{error}"
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
