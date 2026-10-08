@@ -12,8 +12,9 @@ Options:
       --score TEXT ...        Score question as
                               'QUESTION=none,minor,major,outage' (repeatable)
       --request TEXT          Complete DecisionsRequest JSON file (- for stdin)
-      --image TEXT ...        PNG, JPEG or WebP file every question is about
-                              (repeatable, up to 8; cloud only)
+      --image TEXT ...        PNG, JPEG, WebP or HEIC file every question is
+                              about (repeatable, up to 8; cloud only; HEIC needs
+                              macOS)
       --temperature FLOAT     Probability temperature (>0, at most 100)
       --json                  Print the raw response JSON
       --local                 Score on this machine with a local decision model
