@@ -15,6 +15,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
+FIXTURES = pathlib.Path(__file__).resolve().parent / "fixtures"
 ACCESS = "access-token"
 REFRESH = "refresh-token"
 NEW_ACCESS = "new-access-token"
@@ -256,11 +257,28 @@ def main():
             assert [image.split(",", 1)[0] for image in images] == [
                 "data:image/png;base64", "data:image/webp;base64",
             ], images
+            # A HEIC photo goes as a JPEG made from it on macOS, and is refused
+            # with the reason elsewhere.
+            heic = pathlib.Path(profile, "IMG_0001.HEIC")
+            heic.write_bytes((FIXTURES / "quadrants-orientation-6-gps.heic").read_bytes())
+            before = len(ConsoleHandler.requests)
+            photographed = invoke(
+                binary, env, "decisions", "--input", "photo", "--ask", "Okay?", "--image", str(heic),
+            )
+            if sys.platform == "darwin":
+                assert photographed.returncode == 0, photographed.stderr
+                images = ConsoleHandler.requests[-1][2]["images"]
+                assert len(images) == 1 and images[0].startswith("data:image/jpeg;base64,/9j/"), images
+            else:
+                assert photographed.returncode == 2, photographed.stderr
+                assert "HEIC photo" in photographed.stderr and "macOS only" in photographed.stderr
+                assert len(ConsoleHandler.requests) == before, "a refused HEIC request was sent"
+
             before = len(ConsoleHandler.requests)
             gif = pathlib.Path(profile, "a.gif")
             gif.write_bytes(b"GIF89a")
             for args, message in (
-                (["--image", str(gif)], "not a PNG, JPEG or WebP"),
+                (["--image", str(gif)], "not a PNG, JPEG, WebP or HEIC"),
                 (["--image", str(png), "--local"], "cloud only"),
                 (["--image", str(png)] * 9, "at most 8"),
             ):
