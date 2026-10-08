@@ -254,7 +254,8 @@ fn cloud_models() -> Result<CloudModels, String> {
             // Decision-only models never appear above; the price catalog
             // names them. A failed price lookup is not fatal: the rows just
             // stay missing, exactly as before.
-            if let Ok(prices) = session.call(|client, url, token| client.fetch_catalog(url, token)) {
+            if let Ok(prices) = session.call(|client, url, token| client.fetch_catalog(url, token))
+            {
                 for price in &prices {
                     if price.decisions_only
                         && !price.id.is_empty()
@@ -428,7 +429,11 @@ fn run_list(options: &GlobalOptions, scope: Scope) -> i32 {
                 .field_str("name", &row.id)
                 .field_str(
                     "modality",
-                    if row.decisions_only { "decision" } else { "llm" },
+                    if row.decisions_only {
+                        "decision"
+                    } else {
+                        "llm"
+                    },
                 )
                 .field_str("backend", "cloud")
                 .field_i64("size_bytes", 0)
@@ -473,7 +478,12 @@ fn run_list(options: &GlobalOptions, scope: Scope) -> i32 {
     for row in &cloud_ids {
         rows.push(vec![
             row.id.clone(),
-            if row.decisions_only { "decision" } else { "llm" }.to_string(),
+            if row.decisions_only {
+                "decision"
+            } else {
+                "llm"
+            }
+            .to_string(),
             "cloud".to_string(),
             "-".to_string(),
             "-".to_string(),

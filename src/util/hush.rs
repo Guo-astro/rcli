@@ -26,10 +26,7 @@ impl HushedStdout {
         unsafe {
             let saved = libc::dup(libc::STDOUT_FILENO);
             if saved >= 0 {
-                let null = libc::open(
-                    c"/dev/null".as_ptr(),
-                    libc::O_WRONLY,
-                );
+                let null = libc::open(c"/dev/null".as_ptr(), libc::O_WRONLY);
                 if null >= 0 {
                     libc::dup2(null, libc::STDOUT_FILENO);
                     libc::close(null);
@@ -78,8 +75,7 @@ pub fn mute_stdout_process() {
     unsafe {
         let saved = libc::dup(libc::STDOUT_FILENO);
         if saved >= 0 {
-            let null =
-                libc::open(c"/dev/null".as_ptr(), libc::O_WRONLY);
+            let null = libc::open(c"/dev/null".as_ptr(), libc::O_WRONLY);
             if null >= 0 {
                 libc::dup2(null, libc::STDOUT_FILENO);
                 libc::close(null);
