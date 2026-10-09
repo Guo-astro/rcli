@@ -18,7 +18,7 @@
 ## Install
 
 On macOS with Apple Silicon (Intel Macs are not supported) and on Linux with
-x86-64 or ARM64 and glibc 2.35 or newer (Ubuntu 22.04+, Debian 12+):
+x86-64 or ARM64 and glibc 2.38 or newer (Ubuntu 24.04+, Debian 13+):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/RunanywhereAI/wally/main/install.sh | sh

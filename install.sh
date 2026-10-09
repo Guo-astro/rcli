@@ -29,17 +29,17 @@ BIN_DIR="${HOME}/.local/bin"
 # from the system rather than shipping. Both mirror versions.toml [linux_abi]
 # (glibc_max, system_libraries); scripts/ci/check-versions.py fails when they
 # drift. libc's own family is left out: glibc is checked by version above.
-MIN_GLIBC="2.35"
+MIN_GLIBC="2.38"
 # The arm64 bottle has its own floor entry so the two arches can diverge again
 # (mirrors versions.toml [linux_abi_arm64]; check-versions.py holds it). The
 # arm64 case below swaps these in before check_linux_system runs. The
 # system-library list is the same on both arches (the loader differs, but that
 # is checked by the glibc version, not looked up here).
-MIN_GLIBC_ARM64="2.35"
-MIN_GLIBCXX_ARM64="3.4.30"
+MIN_GLIBC_ARM64="2.38"
+MIN_GLIBCXX_ARM64="3.4.32"
 # What the refusals name as a system that qualifies.
-DISTRO_HINT="Ubuntu 22.04+, Debian 12+ and other distributions from 2022 on"
-MIN_GCC="12"
+DISTRO_HINT="Ubuntu 24.04+, Debian 13+ and other distributions from 2024 on"
+MIN_GCC="13"
 LINUX_SYSTEM_LIBRARIES="libstdc++.so.6 libgcc_s.so.1 libssl.so.3 libcrypto.so.3 libcurl.so.4"
 
 # The highest GLIBCXX_/CXXABI_ symbol version the bottle's own ELF files ask
@@ -52,7 +52,7 @@ LINUX_SYSTEM_LIBRARIES="libstdc++.so.6 libgcc_s.so.1 libssl.so.3 libcrypto.so.3 
 # catches a glibc-2.35 host whose libstdc++ is otherwise too old: v0.6.0's
 # bottle needed GLIBCXX_3.4.32, which a stock 22.04 libstdc++ (3.4.30) does not
 # have, and the installer downloaded before finding that out.
-MIN_GLIBCXX="3.4.30"
+MIN_GLIBCXX="3.4.32"
 MIN_CXXABI="1.3.13"
 
 # Retries cover a dropped connection or a 5xx from the CDN, which a first-time
@@ -107,7 +107,7 @@ check_linux_system() {
         [ -e "$loader" ] && musl=1
     done
     if [ "$musl" -eq 1 ] && ! getconf GNU_LIBC_VERSION >/dev/null 2>&1; then
-        fail "Wally's Linux build needs glibc, and this system uses musl (Alpine and similar). Use a glibc distribution such as Ubuntu 22.04+ or Debian 12+."
+        fail "Wally's Linux build needs glibc, and this system uses musl (Alpine and similar). Use a glibc distribution such as Ubuntu 24.04+ or Debian 13+."
     fi
     glibc="$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{ print $2 }')"
     if [ -z "$glibc" ]; then

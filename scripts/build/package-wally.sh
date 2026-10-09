@@ -126,9 +126,8 @@ if [[ -n "${KIT}" && -d "${KIT}/third_party" ]]; then
         mkdir -p "${STAGE}/licenses"
         cp "${gomp_licence}" "${STAGE}/licenses/libgomp1.copyright"
       fi
-      # The aarch64 kit is built against zstd + brotli (its cpp-httplib server)
-      # and bz2 (libarchive); an x86_64 kit references none, so this bundles
-      # only where they are real. Keyed on ldd, not readelf, so libbrotlicommon
+      # The kit is built against zstd + brotli (its cpp-httplib server) and bz2
+      # (libarchive). Keyed on ldd, not readelf, so libbrotlicommon
       # -- pulled in behind libbrotli{enc,dec} rather than by wally directly --
       # is shipped too. All three licences are permissive and travel with the
       # library under the same $ORIGIN runpath as libgomp above.
