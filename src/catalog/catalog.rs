@@ -4906,7 +4906,7 @@ const CATALOG: &[CatalogEntry] = &[
     CatalogEntry {
         id: "lfm-d1-3b",
         alias: Some("lfm-d1-3b-gguf"),
-        name: "LFM D1 3B (GGUF)",
+        name: "LFM D1 3B",
         category: v1::ModelCategory::Decision,
         framework: v1::InferenceFramework::LlamaCpp,
         format: v1::ModelFormat::Gguf,
@@ -4923,7 +4923,7 @@ const CATALOG: &[CatalogEntry] = &[
     CatalogEntry {
         id: "mlx-lfm-d1-3b-8bit",
         alias: Some("lfm-d1-3b-mlx"),
-        name: "LFM D1 3B (MLX 8-bit)",
+        name: "LFM D1 3B",
         category: v1::ModelCategory::Decision,
         framework: v1::InferenceFramework::Mlx,
         format: v1::ModelFormat::Safetensors,
@@ -4940,7 +4940,7 @@ const CATALOG: &[CatalogEntry] = &[
     CatalogEntry {
         id: "lfm-d1-omni-600m",
         alias: Some("lfm-d1-omni-600m-gguf"),
-        name: "LFM D1 Omni 600M (GGUF)",
+        name: "LFM D1 Omni 600M",
         category: v1::ModelCategory::Decision,
         framework: v1::InferenceFramework::LlamaCpp,
         format: v1::ModelFormat::Gguf,
@@ -4957,7 +4957,7 @@ const CATALOG: &[CatalogEntry] = &[
     CatalogEntry {
         id: "mlx-lfm-d1-omni-600m",
         alias: Some("lfm-d1-omni-600m-mlx"),
-        name: "LFM D1 Omni 600M (MLX)",
+        name: "LFM D1 Omni 600M",
         category: v1::ModelCategory::Decision,
         framework: v1::InferenceFramework::Mlx,
         format: v1::ModelFormat::Safetensors,
@@ -4974,7 +4974,7 @@ const CATALOG: &[CatalogEntry] = &[
     CatalogEntry {
         id: "gliner-2.5-decide",
         alias: Some("gliner-2.5-decide-gguf"),
-        name: "GLiNER 2.5 Decide (GGUF)",
+        name: "GLiNER 2.5 Decide",
         category: v1::ModelCategory::Decision,
         framework: v1::InferenceFramework::LlamaCpp,
         format: v1::ModelFormat::Gguf,
@@ -4991,7 +4991,7 @@ const CATALOG: &[CatalogEntry] = &[
     CatalogEntry {
         id: "mlx-gliner-2.5-decide-4bit",
         alias: Some("gliner-2.5-decide-mlx"),
-        name: "GLiNER 2.5 Decide (MLX 4-bit)",
+        name: "GLiNER 2.5 Decide",
         category: v1::ModelCategory::Decision,
         framework: v1::InferenceFramework::Mlx,
         format: v1::ModelFormat::Safetensors,

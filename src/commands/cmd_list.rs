@@ -78,7 +78,9 @@ impl Default for GroupedRow {
 // spellings work for every row: the id as written is llama.cpp, and `mlx-`
 // in front of it is the Apple GPU build. Never printed in --json.
 fn print_pull_examples() {
-    out::result_line("Each id below is the model. Pull it as written, or add mlx- for the Apple GPU build:");
+    out::result_line(
+        "Each id below is the model. Pull it as written, or add mlx- for the Apple GPU build:",
+    );
     #[cfg(wally_has_llamacpp)]
     out::result_line("  wally models pull qwen3-4b-instruct-2507  # llama.cpp");
     #[cfg(target_os = "macos")]
@@ -129,9 +131,7 @@ fn group_models(
             continue;
         }
         let key = crate::catalog::merge_key_for(&model.id);
-        // The id column never carries a backend prefix. `mlx-<id>` is how the
-        // user asks for the Apple GPU build; they add that prefix themselves.
-        let shown = key.strip_prefix("mlx-").unwrap_or(&key).to_string();
+        let shown = shown_model_id(&key);
         let row = groups.entry(key.clone()).or_insert_with(|| {
             order.push(key.clone());
             GroupedRow {
@@ -176,6 +176,21 @@ fn group_models(
         settle_row_id_and_size(row);
     }
     (order, groups)
+}
+
+/// Drop a leading `mlx-` only when the bare name is not already a different
+/// catalog model. `llama3.2` is the GGUF 3B; the MLX 1B stays `mlx-llama3.2`.
+fn shown_model_id(key: &str) -> String {
+    let Some(stripped) = key.strip_prefix("mlx-") else {
+        return key.to_string();
+    };
+    if let Some(entry) = crate::catalog::find(stripped) {
+        let same = entry.id == key || entry.merge_key == Some(key);
+        if !same {
+            return key.to_string();
+        }
+    }
+    stripped.to_string()
 }
 
 fn variant_for_shown_id(row: &GroupedRow) -> Option<String> {
@@ -660,7 +675,9 @@ mod tests {
     }
 
     #[test]
-    fn mlx_prefixed_merge_key_is_shown_without_it() {
+    fn mlx_only_id_stays_when_the_bare_name_is_another_model() {
+        // `llama3.2` is the GGUF Llama 3.2 3B alias. Stripping the prefix
+        // would list the MLX 1B under an id that pulls the other model.
         let models = vec![v1::ModelInfo {
             id: "mlx-llama-3.2-1b-instruct-4bit".to_string(),
             name: "Llama 3.2 1B Instruct".to_string(),
@@ -671,7 +688,12 @@ mod tests {
         }];
         let downloaded: std::collections::HashSet<String> = std::collections::HashSet::new();
         let (order, groups) = group_models(&models, &downloaded, true);
-        assert_eq!(groups[&order[0]].id, "llama3.2");
+        let row = &groups[&order[0]];
+        assert_eq!(row.id, "mlx-llama3.2");
+        assert_eq!(
+            crate::catalog::find(&row.id).map(|entry| entry.id),
+            Some("mlx-llama-3.2-1b-instruct-4bit")
+        );
     }
 
     #[test]
