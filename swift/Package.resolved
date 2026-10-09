@@ -33,7 +33,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/RunanywhereAI/mlx-audio-swift.git",
       "state" : {
-        "revision" : "ecc772d3c433d8b7967d423f2ea35995085c4d1c"
+        "revision" : "cade76c23fa00ef2184452adb12fae22942c73cb",
+        "version" : "0.1.8"
       }
     },
     {
@@ -50,8 +51,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/RunanywhereAI/mlx-swift-lm.git",
       "state" : {
-        "revision" : "6166b1bb1ea96652f37231d09fb3f475fcfa3a25",
-        "version" : "3.31.8"
+        "revision" : "4c31da1d4aa22e2d15b545120a0ba3c19368bc2c",
+        "version" : "3.31.10"
       }
     },
     {
