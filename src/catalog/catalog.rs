@@ -5062,6 +5062,16 @@ pub fn all() -> &'static [CatalogEntry] {
     LLM_ONLY.get_or_init(|| CATALOG.iter().copied().filter(listed).collect())
 }
 
+/// Whether `id_or_alias` is some catalog entry other than `merge_key`.
+/// Platform filtering does not apply: a hidden row must not display an id
+/// that pulls a different model where that other model is listed.
+pub(crate) fn names_different_model(id_or_alias: &str, merge_key: &str) -> bool {
+    CATALOG.iter().any(|entry| {
+        (entry.id == id_or_alias || entry.alias == Some(id_or_alias))
+            && entry.merge_key.unwrap_or(entry.id) != merge_key
+    })
+}
+
 /// Exact id or alias lookup.
 pub fn find(id_or_alias: &str) -> Option<&'static CatalogEntry> {
     for entry in CATALOG {

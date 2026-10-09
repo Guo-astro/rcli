@@ -40,7 +40,7 @@ chmod +x "$STUB/uname"
 
 cat > "$STUB/getconf" <<'GETCONF'
 #!/bin/sh
-[ "$1" = "GNU_LIBC_VERSION" ] && echo "glibc 2.38"
+[ "$1" = "GNU_LIBC_VERSION" ] && echo "glibc 2.39"
 GETCONF
 chmod +x "$STUB/getconf"
 
@@ -167,7 +167,7 @@ bg_code="$(printf '%s\n' "$result_bg" | head -1)"
 bg_body="$(printf '%s\n' "$result_bg" | tail -n +2)"
 check "a bottle library needing a newer glibc is refused (exit 1)" "$([ "$bg_code" = "1" ] && echo 1 || echo 0)"
 check "the refusal names the file and both glibc versions" \
-    "$(printf '%s' "$bg_body" | grep -qF 'lib/libbundled.so.1 needs glibc 2.99; this system has 2.38' && echo 1 || echo 0)"
+    "$(printf '%s' "$bg_body" | grep -qF 'lib/libbundled.so.1 needs glibc 2.99; this system has 2.39' && echo 1 || echo 0)"
 check "nothing was installed after that refusal" \
     "$([ ! -e "$home_bg/.local/lib/wally" ] && [ ! -e "$home_bg/.local/bin/wally" ] && echo 1 || echo 0)"
 

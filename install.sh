@@ -29,13 +29,13 @@ BIN_DIR="${HOME}/.local/bin"
 # from the system rather than shipping. Both mirror versions.toml [linux_abi]
 # (glibc_max, system_libraries); scripts/ci/check-versions.py fails when they
 # drift. libc's own family is left out: glibc is checked by version above.
-MIN_GLIBC="2.38"
+MIN_GLIBC="2.39"
 # The arm64 bottle has its own floor entry so the two arches can diverge again
 # (mirrors versions.toml [linux_abi_arm64]; check-versions.py holds it). The
 # arm64 case below swaps these in before check_linux_system runs. The
 # system-library list is the same on both arches (the loader differs, but that
 # is checked by the glibc version, not looked up here).
-MIN_GLIBC_ARM64="2.38"
+MIN_GLIBC_ARM64="2.39"
 MIN_GLIBCXX_ARM64="3.4.32"
 # What the refusals name as a system that qualifies.
 DISTRO_HINT="Ubuntu 24.04+, Debian 13+ and other distributions from 2024 on"

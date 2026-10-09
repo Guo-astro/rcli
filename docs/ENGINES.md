@@ -59,9 +59,9 @@ QHexRT on device also needs QAIRT matching the Hexagon skel (`QNN_SDK_ROOT` + `A
 
 **Windows x64** (public zip): GGUF / ONNX / Sherpa. No MLX, no NeuRT, no QHexRT.
 
-**Linux x86-64** (public tarball): llama.cpp + Sherpa + ONNX, same as Windows x64. Needs glibc 2.38 or newer.
+**Linux x86-64** (public tarball): llama.cpp + Sherpa + ONNX, same as Windows x64. Needs glibc 2.39 or newer.
 
-**Linux ARM64** (public tarball): llama.cpp + Sherpa + ONNX, same as Linux x86-64. Needs glibc 2.38 or newer.
+**Linux ARM64** (public tarball): llama.cpp + Sherpa + ONNX, same as Linux x86-64. Needs glibc 2.39 or newer.
 
 **Windows ARM64** (Snapdragon): public kit has no llama.cpp/ONNX/Sherpa. The QHexRT overlay runs Hexagon NPU models from a local `*_HNPU` tree. Do not expect `mlx-*`, GGUF, or `sd15` on that binary.
 

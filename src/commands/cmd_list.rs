@@ -184,27 +184,21 @@ fn shown_model_id(key: &str) -> String {
     let Some(stripped) = key.strip_prefix("mlx-") else {
         return key.to_string();
     };
-    if let Some(entry) = crate::catalog::find(stripped) {
-        let same = entry.id == key || entry.merge_key == Some(key);
-        if !same {
-            return key.to_string();
-        }
+    if crate::catalog::names_different_model(stripped, key) {
+        return key.to_string();
     }
     stripped.to_string()
 }
 
 fn variant_for_shown_id(row: &GroupedRow) -> Option<String> {
-    let names = [row.id.clone(), format!("mlx-{}", row.id)];
-    for name in names {
-        let Some(entry) = crate::catalog::find(&name) else {
-            continue;
-        };
-        let id = entry.id.to_string();
-        if row.variants.iter().any(|(variant, _, _)| variant == &id) {
-            return Some(id);
-        }
+    if row.variants.iter().any(|(id, _, _)| id == &row.id) {
+        return Some(row.id.clone());
     }
-    None
+    let prefixed = format!("mlx-{}", row.id);
+    row.variants
+        .iter()
+        .find(|(id, _, _)| *id == prefixed || crate::catalog::merge_key_for(id) == row.id)
+        .map(|(id, _, _)| id.clone())
 }
 
 // Size follows the build `pull <id>` fetches. When that name is only an
@@ -691,8 +685,8 @@ mod tests {
         let row = &groups[&order[0]];
         assert_eq!(row.id, "mlx-llama3.2");
         assert_eq!(
-            crate::catalog::find(&row.id).map(|entry| entry.id),
-            Some("mlx-llama-3.2-1b-instruct-4bit")
+            crate::catalog::merge_key_for("mlx-llama-3.2-1b-instruct-4bit"),
+            row.id
         );
     }
 
