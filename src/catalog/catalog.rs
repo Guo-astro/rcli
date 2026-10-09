@@ -2762,6 +2762,144 @@ const CLEF_MLX_4BIT_FILES: &[CatalogFile] = &[
     },
 ];
 
+const D1_3B_GGUF_FILES: &[CatalogFile] = &[CatalogFile {
+    url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/main/gguf/d1-3B-Q4_K_M.gguf",
+    filename: "d1-3B-Q4_K_M.gguf",
+    required: true,
+    size_bytes: 1674456672,
+    checksum_sha256: Some("16aff27ea2eefdc32b9897f43854a5d3170c1dc8dccb9c756905af30a4e22402"),
+}];
+
+const D1_OMNI_GGUF_FILES: &[CatalogFile] = &[CatalogFile {
+    url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/main/gguf/d1-omni-600M-Q8_0.gguf",
+    filename: "d1-omni-600M-Q8_0.gguf",
+    required: true,
+    size_bytes: 407207584,
+    checksum_sha256: Some("cd94463f4cac9c700ec6750df8df005bb6846de410e159d1f5e985e1171693d3"),
+}];
+
+const GLINER_DECIDE_GGUF_FILES: &[CatalogFile] = &[CatalogFile {
+    url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/main/gguf/gliner2.5-decide-q4_k_m.gguf",
+    filename: "gliner2.5-decide-q4_k_m.gguf",
+    required: true,
+    size_bytes: 299547616,
+    checksum_sha256: Some("44b496627d85c19e407ffb188866456ef6c8b73ca1efd36b31981c28a96346b5"),
+}];
+
+const D1_3B_MLX_FILES: &[CatalogFile] = &[
+    CatalogFile {
+        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/main/mlx/lfm-d1-3b-8bit/config.json",
+        filename: "config.json",
+        required: true,
+        size_bytes: 3445,
+        checksum_sha256: Some("d7e4d856b45cad2191ac9bac4266e55f7b5ea878fcb5e69a6ceac3f54b689ab9"),
+    },
+    CatalogFile {
+        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/main/mlx/lfm-d1-3b-8bit/model.safetensors",
+        filename: "model.safetensors",
+        required: true,
+        size_bytes: 3718720809,
+        checksum_sha256: Some("c003549c43780cdcdef9fe3af8647ddde573e7eeea816315f7718179f109cce8"),
+    },
+    CatalogFile {
+        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/main/mlx/lfm-d1-3b-8bit/tokenizer.json",
+        filename: "tokenizer.json",
+        required: true,
+        size_bytes: 17905750,
+        checksum_sha256: Some("8096ecb9f54599d756c8de728a598a340bc1e43c0deb77ddd62456c38349fcee"),
+    },
+    CatalogFile {
+        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/main/mlx/lfm-d1-3b-8bit/tokenizer_config.json",
+        filename: "tokenizer_config.json",
+        required: true,
+        size_bytes: 506,
+        checksum_sha256: Some("880b960c1ea99a84bc16cb759e2e343ea8126f8e86ecb3bcb0a837b2aebb8c1d"),
+    },
+    CatalogFile {
+        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/main/mlx/lfm-d1-3b-8bit/processor_config.json",
+        filename: "processor_config.json",
+        required: true,
+        size_bytes: 720,
+        checksum_sha256: Some("7c68d308c96ca6111414d641e6fe9b94505167a1d00714f18f43fd7f8ae91414"),
+    },
+    CatalogFile {
+        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/main/mlx/lfm-d1-3b-8bit/chat_template.jinja",
+        filename: "chat_template.jinja",
+        required: false,
+        size_bytes: 5436,
+        checksum_sha256: Some("86f4770449a4797c9b4212d110b0cc70fb993c1ce960095bcfb12eea22f61cca"),
+    },
+];
+
+const D1_OMNI_MLX_FILES: &[CatalogFile] = &[
+    CatalogFile {
+        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/main/mlx/lfm-d1-omni-600m/config.json",
+        filename: "config.json",
+        required: true,
+        size_bytes: 1922,
+        checksum_sha256: Some("0b985b0c881d2297b25fab09bc805617d0b3a82ed699045da3e1634c3ea06a0a"),
+    },
+    CatalogFile {
+        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/main/mlx/lfm-d1-omni-600m/model.safetensors",
+        filename: "model.safetensors",
+        required: true,
+        size_bytes: 1174449298,
+        checksum_sha256: Some("22fcd4a2b582ccba956ae78a47ffc69ee65df7602e74101a73e83e3569438e7a"),
+    },
+    CatalogFile {
+        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/main/mlx/lfm-d1-omni-600m/tokenizer.json",
+        filename: "tokenizer.json",
+        required: true,
+        size_bytes: 4733371,
+        checksum_sha256: Some("1efc3a6609abf6b63b1f47188d139f3b59973a6a434dffe970a7261a51ed2711"),
+    },
+    CatalogFile {
+        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/main/mlx/lfm-d1-omni-600m/tokenizer_config.json",
+        filename: "tokenizer_config.json",
+        required: true,
+        size_bytes: 259,
+        checksum_sha256: Some("03efc74b752b899b6292ff7e607738be59e6f206fec9aca32bbc05e9184090fc"),
+    },
+];
+
+const GLINER_DECIDE_MLX_FILES: &[CatalogFile] = &[
+    CatalogFile {
+        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/main/mlx/gliner-2.5-decide-4bit/config.json",
+        filename: "config.json",
+        required: true,
+        size_bytes: 1454,
+        checksum_sha256: Some("216030044bb8f5ae3ffeda85fc3dee54501322108ec2425ce00faf63d4c5d793"),
+    },
+    CatalogFile {
+        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/main/mlx/gliner-2.5-decide-4bit/model.safetensors",
+        filename: "model.safetensors",
+        required: true,
+        size_bytes: 350433655,
+        checksum_sha256: Some("52fb2f493fbd584537a8247ab3184053ebab4129e3d322d4e85868bbe8f0f0a4"),
+    },
+    CatalogFile {
+        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/main/mlx/gliner-2.5-decide-4bit/tokenizer.json",
+        filename: "tokenizer.json",
+        required: true,
+        size_bytes: 8333952,
+        checksum_sha256: Some("3ad87d9ffe669147063e70850927dd2da90249e2acc5c8527f1eb65df467bcc8"),
+    },
+    CatalogFile {
+        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/main/mlx/gliner-2.5-decide-4bit/tokenizer_config.json",
+        filename: "tokenizer_config.json",
+        required: true,
+        size_bytes: 3356,
+        checksum_sha256: Some("323199a4e946039410899f3779f2aa3eaef1500213c512727ad0f623d4f21309"),
+    },
+    CatalogFile {
+        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/main/mlx/gliner-2.5-decide-4bit/special_tokens_map.json",
+        filename: "special_tokens_map.json",
+        required: true,
+        size_bytes: 2414,
+        checksum_sha256: Some("84ea70143f533d7e99b393d87f20010887a9ac2cba955828ef313886e4e83f4f"),
+    },
+];
+
 const CATALOG: &[CatalogEntry] = &[
     // --- LLM (LlamaCpp / GGUF) ---
     // Name carries Q8_0 on purpose: this is the one GGUF artifact in the
@@ -4765,6 +4903,108 @@ const CATALOG: &[CatalogEntry] = &[
         merge_key: Some("pplx-decider-27b"),
         harness_compatible: false,
     },
+    CatalogEntry {
+        id: "lfm-d1-3b",
+        alias: Some("lfm-d1-3b-gguf"),
+        name: "LFM D1 3B",
+        category: v1::ModelCategory::Decision,
+        framework: v1::InferenceFramework::LlamaCpp,
+        format: v1::ModelFormat::Gguf,
+        url: None,
+        files: D1_3B_GGUF_FILES,
+        download_size_bytes: 1674456672,
+        context_length: 0,
+        supports_thinking: false,
+        memory_required_bytes: 0,
+        cua_profile: "",
+        merge_key: Some("lfm-d1-3b"),
+        harness_compatible: false,
+    },
+    CatalogEntry {
+        id: "mlx-lfm-d1-3b-8bit",
+        alias: Some("lfm-d1-3b-mlx"),
+        name: "LFM D1 3B",
+        category: v1::ModelCategory::Decision,
+        framework: v1::InferenceFramework::Mlx,
+        format: v1::ModelFormat::Safetensors,
+        url: None,
+        files: D1_3B_MLX_FILES,
+        download_size_bytes: 3736636666,
+        context_length: 0,
+        supports_thinking: false,
+        memory_required_bytes: 0,
+        cua_profile: "",
+        merge_key: Some("lfm-d1-3b"),
+        harness_compatible: false,
+    },
+    CatalogEntry {
+        id: "lfm-d1-omni-600m",
+        alias: Some("lfm-d1-omni-600m-gguf"),
+        name: "LFM D1 Omni 600M",
+        category: v1::ModelCategory::Decision,
+        framework: v1::InferenceFramework::LlamaCpp,
+        format: v1::ModelFormat::Gguf,
+        url: None,
+        files: D1_OMNI_GGUF_FILES,
+        download_size_bytes: 407207584,
+        context_length: 0,
+        supports_thinking: false,
+        memory_required_bytes: 0,
+        cua_profile: "",
+        merge_key: Some("lfm-d1-omni-600m"),
+        harness_compatible: false,
+    },
+    CatalogEntry {
+        id: "mlx-lfm-d1-omni-600m",
+        alias: Some("lfm-d1-omni-600m-mlx"),
+        name: "LFM D1 Omni 600M",
+        category: v1::ModelCategory::Decision,
+        framework: v1::InferenceFramework::Mlx,
+        format: v1::ModelFormat::Safetensors,
+        url: None,
+        files: D1_OMNI_MLX_FILES,
+        download_size_bytes: 1179184850,
+        context_length: 0,
+        supports_thinking: false,
+        memory_required_bytes: 0,
+        cua_profile: "",
+        merge_key: Some("lfm-d1-omni-600m"),
+        harness_compatible: false,
+    },
+    CatalogEntry {
+        id: "gliner-2.5-decide",
+        alias: Some("gliner-2.5-decide-gguf"),
+        name: "GLiNER 2.5 Decide",
+        category: v1::ModelCategory::Decision,
+        framework: v1::InferenceFramework::LlamaCpp,
+        format: v1::ModelFormat::Gguf,
+        url: None,
+        files: GLINER_DECIDE_GGUF_FILES,
+        download_size_bytes: 299547616,
+        context_length: 512,
+        supports_thinking: false,
+        memory_required_bytes: 0,
+        cua_profile: "",
+        merge_key: Some("gliner-2.5-decide"),
+        harness_compatible: false,
+    },
+    CatalogEntry {
+        id: "mlx-gliner-2.5-decide-4bit",
+        alias: Some("gliner-2.5-decide-mlx"),
+        name: "GLiNER 2.5 Decide",
+        category: v1::ModelCategory::Decision,
+        framework: v1::InferenceFramework::Mlx,
+        format: v1::ModelFormat::Safetensors,
+        url: None,
+        files: GLINER_DECIDE_MLX_FILES,
+        download_size_bytes: 358774831,
+        context_length: 0,
+        supports_thinking: false,
+        memory_required_bytes: 0,
+        cua_profile: "",
+        merge_key: Some("gliner-2.5-decide"),
+        harness_compatible: false,
+    },
 ];
 
 // AUTO-TRANSLITERATED DATA END
@@ -4820,6 +5060,16 @@ pub fn all() -> &'static [CatalogEntry] {
     // slice every call, matching the C++ `static const std::vector` cache.
     static LLM_ONLY: OnceLock<Vec<CatalogEntry>> = OnceLock::new();
     LLM_ONLY.get_or_init(|| CATALOG.iter().copied().filter(listed).collect())
+}
+
+/// Whether `id_or_alias` is some catalog entry other than `merge_key`.
+/// Platform filtering does not apply: a hidden row must not display an id
+/// that pulls a different model where that other model is listed.
+pub(crate) fn names_different_model(id_or_alias: &str, merge_key: &str) -> bool {
+    CATALOG.iter().any(|entry| {
+        (entry.id == id_or_alias || entry.alias == Some(id_or_alias))
+            && entry.merge_key.unwrap_or(entry.id) != merge_key
+    })
 }
 
 /// Exact id or alias lookup.

@@ -181,9 +181,10 @@ jobs:
         run: bash scripts/test/e2e.sh ./build/wally
 
   linux:
-    # Match the oldest supported Linux release baseline. Building on 24.04
-    # silently introduced GLIBC_2.38 / GLIBCXX_3.4.31+ requirements.
-    runs-on: ubuntu-22.04
+    # Kit 0.20.39's Sherpa prebuilt needs glibc 2.38 and GLIBCXX_3.4.32, so
+    # this job builds and runs on that floor. wally's own code picks up the
+    # same glibc; versions.toml [linux_abi] is that floor.
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
@@ -192,7 +193,8 @@ jobs:
       - name: Install build deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build cmake libcurl4-openssl-dev patchelf
+          sudo apt-get install -y ninja-build cmake libcurl4-openssl-dev patchelf \
+            libzstd-dev libbrotli-dev libbz2-dev
       - uses: hendrikmuhs/ccache-action@f09c25b45002a07be2955cbe52e8cee55643f89d
         with:
           key: ccache-ci-linux-x64

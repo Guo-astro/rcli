@@ -7,7 +7,7 @@
 
 [product]
 # wally's own release version; git tag is v<version> (auto-tag.yml reads it here).
-version = "0.8.3"
+version = "0.8.5"
 
 [contracts]
 # Vendored from InferenceInfra at this exact revision.
@@ -16,16 +16,16 @@ decisions_contract_sha256 = "6cd5afaa222e55337dcab1fa4b2bbee2763cea707e18d539a5c
 
 [sdk]
 # The published C++ desktop kit this tree builds against; bump the SHAs with it.
-kit_version = "0.20.38"
-kit_release_tag = "cpp-desktop-v0.20.38-4"
+kit_version = "0.20.39"
+kit_release_tag = "cpp-desktop-v0.20.39"
 idl_version = "1.5.0"
 idl_schema_sha256 = "faca2c22e518f3d41e534399b854bbbc9617d4a76511592a6013a888fdd3cf3d"
 idl_protoc_version = "35.1"
-kit_sha256_macos_arm64 = "5e025878f2b2267ebe5840b858b9dab44d4af1ea43c674939f12fdb485905290"
-kit_sha256_windows_x64 = "48c72cad2de2bba467f4be9225daeb30cff43a4e1b710d0f8153de3c09e7230c"
-kit_sha256_windows_arm64 = "f194fd6eec1aa20c360ef9e7a82391c7fde09ad563d1da3343cec404c5421a85"
-kit_sha256_linux_x64 = "8008d49b40534cb09f12dbdbbcfeaa4f7e74791908ec42d1acd919caf62c3cd2"
-kit_sha256_linux_arm64 = "6971dfe6c67a38e791e6787d11eafbeae0a7d96e4f5b1816a7059473964533e0"
+kit_sha256_macos_arm64 = "1262fa1a54be0945c862d66565afeadcee8d840dac3c65a0649838fba62ffda6"
+kit_sha256_windows_x64 = "917c0798706f237a0668f45b1a78915d3b44150b19659347a4641ea7830bf51a"
+kit_sha256_windows_arm64 = "10964d413eda749698e8a2d2afe9438182d2748b1b46a38c82b7f91ea1622653"
+kit_sha256_linux_x64 = "fa9080f282c3cc494ee5a9d1fdfa0e8fc01a621292b44b6ccd9d3140c7853eed"
+kit_sha256_linux_arm64 = "7492758d20e584f56b99be9d262959c4c512011ae13337a34b49bf44498ec5e6"
 
 [swift]
 # The Apple MLX host's Swift SDK: sdk_package_version pins swift/Package.swift,
@@ -64,14 +64,16 @@ linux_compat = "ubuntu-22.04"
 linux_arm64 = "ubuntu-22.04-arm"
 
 [linux_abi]
-# What the Linux bottle may ask of the system it runs on. The floor is Ubuntu
-# 22.04 (glibc 2.35, libstdc++ from GCC 12); Debian 12 and newer Ubuntu clear
-# it. scripts/release/check-linux-abi.py fails a release whose ELF files need a
-# newer symbol version, or a shared library that is neither shipped in the
-# bottle nor listed here. install.sh checks the same glibc, glibcxx_max and
-# cxxabi_max before it downloads (MIN_GLIBC, MIN_GLIBCXX, MIN_CXXABI).
-glibc_max = "2.35"
-glibcxx_max = "3.4.30"
+# What the Linux bottle may ask of the system it runs on. Kit 0.20.39's
+# Sherpa prebuilt needs glibc 2.38 and GLIBCXX_3.4.32. Building the bottle on
+# Ubuntu 24.04 also pulls glibc 2.39 into wally itself, so the floor is Ubuntu
+# 24.04 (GCC 13). Debian 13 clears it. scripts/release/check-linux-abi.py fails
+# a release whose ELF files need a newer symbol version, or a shared library
+# that is neither shipped in the bottle nor listed here. install.sh checks the
+# same glibc, glibcxx_max and cxxabi_max before it downloads (MIN_GLIBC,
+# MIN_GLIBCXX, MIN_CXXABI).
+glibc_max = "2.39"
+glibcxx_max = "3.4.32"
 cxxabi_max = "1.3.13"
 system_libraries = [
     "ld-linux-x86-64.so.2", "libc.so.6", "libm.so.6", "libdl.so.2",
@@ -83,16 +85,15 @@ system_libraries = [
 interpreters = ["/lib64/ld-linux-x86-64.so.2"]
 
 [linux_abi_arm64]
-# The arm64 bottle has the same floor as the x86-64 one (Ubuntu 22.04, Debian
-# 12): wally and the kit's Sherpa prebuilt are both built on ubuntu-22.04-arm.
+# The arm64 bottle has the same floor as the x86-64 one (Ubuntu 24.04, Debian
+# 13). The kit's Sherpa prebuilt needs glibc 2.38 and GLIBCXX_3.4.32.
 # It keeps its own block for the loader name and system libraries below. The
-# arm64 kit's cpp-httplib (zstd, brotli) and libarchive (bz2) pull three
-# compression libraries the x86-64 kit references from none of its objects, so
-# the bottle bundles those under lib/ (they are shipped, not listed here).
+# Both kits pull zstd, brotli and bz2. The bottle bundles those under lib/
+# (they are shipped, not listed here).
 # check-linux-abi.py reads this block for an arm64 archive; install.sh holds
 # MIN_GLIBC_ARM64/MIN_GLIBCXX_ARM64 to it.
-glibc_max = "2.35"
-glibcxx_max = "3.4.30"
+glibc_max = "2.39"
+glibcxx_max = "3.4.32"
 cxxabi_max = "1.3.13"
 system_libraries = [
     "ld-linux-aarch64.so.1", "libc.so.6", "libm.so.6", "libdl.so.2",

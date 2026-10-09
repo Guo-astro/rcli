@@ -74,12 +74,13 @@ impl Default for GroupedRow {
     }
 }
 
-// A short "how do I download one?" header for the human list. The pull id
-// differs by backend, so show one example per backend this build can run:
-// llama.cpp where the kit has it (not the Windows ARM64 kit); on Apple also
-// MLX. Never printed in --json.
+// The table id is the model name, with no backend prefix. The same two
+// spellings work for every row: the id as written is llama.cpp, and `mlx-`
+// in front of it is the Apple GPU build. Never printed in --json.
 fn print_pull_examples() {
-    out::result_line("Download a model with `wally models pull <id>`:");
+    out::result_line(
+        "Each id below is the model. Pull it as written, or add mlx- for the Apple GPU build:",
+    );
     #[cfg(wally_has_llamacpp)]
     out::result_line("  wally models pull qwen3-4b-instruct-2507  # llama.cpp");
     #[cfg(target_os = "macos")]
@@ -130,10 +131,11 @@ fn group_models(
             continue;
         }
         let key = crate::catalog::merge_key_for(&model.id);
+        let shown = shown_model_id(&key);
         let row = groups.entry(key.clone()).or_insert_with(|| {
             order.push(key.clone());
             GroupedRow {
-                id: key.clone(),
+                id: shown,
                 ..GroupedRow::default()
             }
         });
@@ -148,18 +150,13 @@ fn group_models(
             || catalog_entry
                 .map(|entry| entry.harness_compatible)
                 .unwrap_or(false);
-        // Show the id of a variant actually on disk, not a merge key that
-        // names nothing downloaded, so copying it inspects/pulls the same
-        // backend that's there rather than falling back to catalog defaults.
-        // When the variant registered under the merge key itself is on disk,
-        // it wins over a better-ranked backend: that id is downloaded too, and
-        // it is the one the C++ list showed, so a second downloaded backend
-        // must not make it vanish from the list.
+        // Remember where a downloaded copy lives. The shown id stays the
+        // model name either way, so a downloaded MLX build does not rename
+        // the row to `mlx-…`.
         let id_rank = if model.id == key { i32::MIN } else { rank };
         if is_downloaded && id_rank < row.path_rank {
             row.path_rank = id_rank;
             row.local_path = model.local_path.clone();
-            row.id = model.id.clone();
         }
         if rank < row.name_rank {
             row.name_rank = rank;
@@ -181,31 +178,37 @@ fn group_models(
     (order, groups)
 }
 
-// The merge key only resolves when a variant is registered under it or under
-// it as an alias; a model that ships a single `mlx-` build (ternary-bonsai-27b)
-// has neither, so `pull <key>` failed as an unknown model. Show the
-// best-ranked real id instead. The size then comes from the variant that id
-// pulls: the best-ranked size alone showed the MLX build while `pull <key>`
-// fetched the GGUF (2.2 GB listed, 4.0 GB pulled for qwen3-4b-instruct-2507).
+/// Drop a leading `mlx-` only when the bare name is not already a different
+/// catalog model. `llama3.2` is the GGUF 3B; the MLX 1B stays `mlx-llama3.2`.
+fn shown_model_id(key: &str) -> String {
+    let Some(stripped) = key.strip_prefix("mlx-") else {
+        return key.to_string();
+    };
+    if crate::catalog::names_different_model(stripped, key) {
+        return key.to_string();
+    }
+    stripped.to_string()
+}
+
+fn variant_for_shown_id(row: &GroupedRow) -> Option<String> {
+    if row.variants.iter().any(|(id, _, _)| id == &row.id) {
+        return Some(row.id.clone());
+    }
+    let prefixed = format!("mlx-{}", row.id);
+    row.variants
+        .iter()
+        .find(|(id, _, _)| *id == prefixed || crate::catalog::merge_key_for(id) == row.id)
+        .map(|(id, _, _)| id.clone())
+}
+
+// Size follows the build `pull <id>` fetches. When that name is only an
+// Apple GPU model, `pull mlx-<id>` is the build, and the size is that one.
+// The shown id itself is left alone.
 fn settle_row_id_and_size(row: &mut GroupedRow) {
-    let pulled = crate::catalog::find(&row.id)
-        .map(|entry| entry.id.to_string())
-        .filter(|id| row.variants.iter().any(|(variant, _, _)| variant == id))
-        .or_else(|| {
-            row.variants
-                .iter()
-                .find(|(variant, _, _)| *variant == row.id)
-                .map(|(variant, _, _)| variant.clone())
-        });
+    let pulled = variant_for_shown_id(row);
     let pulled = match pulled {
         Some(id) => id,
-        None => match row.variants.iter().min_by_key(|(_, rank, _)| *rank) {
-            Some((id, _, _)) => {
-                row.id = id.clone();
-                id.clone()
-            }
-            None => return,
-        },
+        None => return,
     };
     if let Some((id, rank, size)) = row.variants.iter().find(|(id, _, _)| *id == pulled) {
         // An unknown size shows as `-`, not as another backend's size.
@@ -570,10 +573,9 @@ mod tests {
     }
 
     #[test]
-    fn downloaded_variant_id_wins_over_merge_key() {
-        // Only the MLX variant is downloaded. Without the fix, row.id stayed
-        // the merge key even though the merge key names no downloaded
-        // backend here, so copying it would pull/inspect the wrong id.
+    fn downloaded_mlx_variant_keeps_the_model_name() {
+        // Only the MLX variant is downloaded. The row still shows the model
+        // name. The user adds mlx- when they want that build.
         let models = vec![
             llamacpp_variant(""),
             mlx_variant("/models/mlx-qwen3-4b-instruct-2507-4bit"),
@@ -583,7 +585,7 @@ mod tests {
         let (order, groups) = group_models(&models, &downloaded, true);
         assert_eq!(order, vec!["qwen3-4b-instruct-2507".to_string()]);
         let row = &groups["qwen3-4b-instruct-2507"];
-        assert_eq!(row.id, "mlx-qwen3-4b-instruct-2507-4bit");
+        assert_eq!(row.id, "qwen3-4b-instruct-2507");
         assert_eq!(row.local_path, "/models/mlx-qwen3-4b-instruct-2507-4bit");
     }
 
@@ -633,7 +635,9 @@ mod tests {
     }
 
     #[test]
-    fn downloaded_mlx_row_shows_the_mlx_size() {
+    fn downloaded_mlx_row_keeps_the_llama_cpp_size() {
+        // The shown id pulls the llama.cpp build, so the size is that build
+        // even when only the MLX copy is on disk.
         let models = vec![
             llamacpp_variant(""),
             mlx_variant("/models/mlx-qwen3-4b-instruct-2507-4bit"),
@@ -641,13 +645,13 @@ mod tests {
         let downloaded: std::collections::HashSet<String> =
             std::iter::once("mlx-qwen3-4b-instruct-2507-4bit".to_string()).collect();
         let (_, groups) = group_models(&models, &downloaded, true);
-        assert_eq!(groups["qwen3-4b-instruct-2507"].size_bytes, 2_360_000_000);
+        assert_eq!(groups["qwen3-4b-instruct-2507"].size_bytes, 4_280_000_000);
     }
 
     #[test]
-    fn mlx_only_model_shows_a_pullable_id() {
-        // ternary-bonsai-27b ships only an mlx- build, so its merge key names
-        // no registered model.
+    fn mlx_only_model_drops_the_prefix() {
+        // ternary-bonsai-27b ships only an mlx- build. The row shows the
+        // model name; `pull mlx-ternary-bonsai-27b` is how you get it.
         let models = vec![v1::ModelInfo {
             id: "mlx-ternary-bonsai-27b-2bit".to_string(),
             name: "Ternary Bonsai 27B".to_string(),
@@ -660,8 +664,30 @@ mod tests {
         let (order, groups) = group_models(&models, &downloaded, true);
         let row = &groups[&order[0]];
         assert_eq!(order, vec!["ternary-bonsai-27b".to_string()]);
-        assert_eq!(row.id, "mlx-ternary-bonsai-27b-2bit");
+        assert_eq!(row.id, "ternary-bonsai-27b");
         assert_eq!(row.size_bytes, 8_480_000_000);
+    }
+
+    #[test]
+    fn mlx_only_id_stays_when_the_bare_name_is_another_model() {
+        // `llama3.2` is the GGUF Llama 3.2 3B alias. Stripping the prefix
+        // would list the MLX 1B under an id that pulls the other model.
+        let models = vec![v1::ModelInfo {
+            id: "mlx-llama-3.2-1b-instruct-4bit".to_string(),
+            name: "Llama 3.2 1B Instruct".to_string(),
+            category: v1::ModelCategory::Language as i32,
+            framework: v1::InferenceFramework::Mlx as i32,
+            download_size_bytes: 712_575_975,
+            ..Default::default()
+        }];
+        let downloaded: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let (order, groups) = group_models(&models, &downloaded, true);
+        let row = &groups[&order[0]];
+        assert_eq!(row.id, "mlx-llama3.2");
+        assert_eq!(
+            crate::catalog::merge_key_for("mlx-llama-3.2-1b-instruct-4bit"),
+            row.id
+        );
     }
 
     #[test]

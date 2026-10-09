@@ -28,10 +28,11 @@ ARCHIVE="wally-${VERSION}-linux-x86_64.tar.gz"
 
 # image | expectation | text the output must contain
 CASES=(
-  "ubuntu:22.04|installs|wally ${VERSION}"
   "ubuntu:24.04|installs|wally ${VERSION}"
-  "debian:12|installs|wally ${VERSION}"
-  "ubuntu:20.04|refused|needs glibc 2.35 or newer"
+  "debian:13|installs|wally ${VERSION}"
+  "ubuntu:22.04|refused|needs glibc 2.39 or newer"
+  "debian:12|refused|needs glibc 2.39 or newer"
+  "ubuntu:20.04|refused|needs glibc 2.39 or newer"
   "alpine:3.20|refused|uses musl"
 )
 

@@ -40,7 +40,7 @@ chmod +x "$STUB/uname"
 
 cat > "$STUB/getconf" <<'GETCONF'
 #!/bin/sh
-[ "$1" = "GNU_LIBC_VERSION" ] && echo "glibc 2.35"
+[ "$1" = "GNU_LIBC_VERSION" ] && echo "glibc 2.39"
 GETCONF
 chmod +x "$STUB/getconf"
 
@@ -132,13 +132,13 @@ old_code="$(printf '%s\n' "$result_old" | head -1)"
 old_body="$(printf '%s\n' "$result_old" | tail -n +2)"
 check "an old libstdc++ is refused (exit 1)" "$([ "$old_code" = "1" ] && echo 1 || echo 0)"
 check "the refusal names the required GLIBCXX floor" \
-    "$(printf '%s' "$old_body" | grep -qF 'GLIBCXX_3.4.30' && echo 1 || echo 0)"
+    "$(printf '%s' "$old_body" | grep -qF 'GLIBCXX_3.4.32' && echo 1 || echo 0)"
 check "nothing was downloaded before the refusal" \
     "$(printf '%s' "$old_body" | grep -qF Downloading && echo 0 || echo 1)"
 
 # --- a libstdc++ at or above the floor is accepted and the install proceeds --
 new="$WORK/new-libstdcxx.txt"
-printf 'GLIBCXX_3.4.30\nCXXABI_1.3.13\nGLIBCXX_3.4.31\n' >"$new"
+printf 'GLIBCXX_3.4.32\nCXXABI_1.3.13\n' >"$new"
 home_new="$WORK/home-new"; mkdir -p "$home_new"
 result_new="$(run "$home_new" "$new")"
 new_code="$(printf '%s\n' "$result_new" | head -1)"
@@ -167,7 +167,7 @@ bg_code="$(printf '%s\n' "$result_bg" | head -1)"
 bg_body="$(printf '%s\n' "$result_bg" | tail -n +2)"
 check "a bottle library needing a newer glibc is refused (exit 1)" "$([ "$bg_code" = "1" ] && echo 1 || echo 0)"
 check "the refusal names the file and both glibc versions" \
-    "$(printf '%s' "$bg_body" | grep -qF 'lib/libbundled.so.1 needs glibc 2.99; this system has 2.35' && echo 1 || echo 0)"
+    "$(printf '%s' "$bg_body" | grep -qF 'lib/libbundled.so.1 needs glibc 2.99; this system has 2.39' && echo 1 || echo 0)"
 check "nothing was installed after that refusal" \
     "$([ ! -e "$home_bg/.local/lib/wally" ] && [ ! -e "$home_bg/.local/bin/wally" ] && echo 1 || echo 0)"
 
