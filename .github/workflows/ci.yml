@@ -378,6 +378,12 @@ jobs:
       - name: Windows update preserves unrelated files and rollback backups
         shell: pwsh
         run: scripts/test/test-update-in-place.ps1 -Binary ./build/wally.exe
+      - name: Windows update ownership regressions
+        shell: pwsh
+        env:
+          WALLY_BUILD_ENV: ${{ github.workspace }}/build/generated/wally-build.env
+          CARGO_TARGET_DIR: ${{ github.workspace }}/build/cargo
+        run: cargo test --release --locked --lib commands::update_backups::tests
 
   windows:
     runs-on: windows-2022
@@ -446,3 +452,9 @@ jobs:
       - name: Windows update preserves unrelated files and rollback backups
         shell: pwsh
         run: scripts/test/test-update-in-place.ps1 -Binary ./build/wally.exe
+      - name: Windows update ownership regressions
+        shell: pwsh
+        env:
+          WALLY_BUILD_ENV: ${{ github.workspace }}/build/generated/wally-build.env
+          CARGO_TARGET_DIR: ${{ github.workspace }}/build/cargo
+        run: cargo test --release --locked --lib commands::update_backups::tests
