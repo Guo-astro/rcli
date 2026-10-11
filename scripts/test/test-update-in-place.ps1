@@ -63,6 +63,18 @@ try {
     }
     Assert (@(Get-ChildItem -LiteralPath $F.Target -Filter '*.wally-backup-*').Count -eq 0) 'unlocked backups removed'
 
+    $F = Fixture 'interrupted-recovery'
+    $RecoveryId = [Guid]::NewGuid().ToString('N')
+    $RecoveryBackup = Join-Path $F.Target "wally.exe.wally-backup-$RecoveryId"
+    $RecoveryPending = Join-Path $F.Target ".wally-update-$RecoveryId.pending"
+    [IO.File]::WriteAllText($RecoveryBackup, 'recovery executable')
+    [IO.File]::WriteAllText($RecoveryPending, 'incomplete receipt')
+    $Warnings = @(& { Update-InPlace $F.Source $F.Target } 3>&1)
+    Assert (@($Warnings | Where-Object { $_ -is [Management.Automation.WarningRecord] -and $_.Message -match 'interrupted' }).Count -eq 1) 'interrupted recovery warning surfaced'
+    Assert (([IO.File]::ReadAllText($RecoveryBackup)) -eq 'recovery executable') 'uncommitted recovery backup preserved'
+    Assert (([IO.File]::ReadAllText($RecoveryPending)) -eq 'incomplete receipt') 'uncommitted pending receipt preserved'
+    Assert (([IO.File]::ReadAllText((Join-Path $F.Target 'wally.exe'))) -eq 'new wally.exe') 'warning does not prevent a new update'
+
     $F = Fixture 'rollback'
     $script:FailPlacement = $true
     $Failed = $false

@@ -61,6 +61,18 @@ function Update-InPlace([string]$Source, [string]$Target) {
     $Placed = @()
     try {
         try {
+            # Uncommitted recovery files have no cleanup authorization. Surface
+            # them on the next update, but leave manual recovery to the user.
+            foreach ($Recovery in @(Get-ChildItem -LiteralPath $Target -Force -File)) {
+                if ($Recovery.Name -match '^\.wally-update-([0-9a-f]{32})\.pending$' -or
+                    $Recovery.Name -match '^.+\.wally-backup-([0-9a-f]{32})$') {
+                    $RecoveryReceipt = Join-Path $Target ".wally-update-$($Matches[1]).json"
+                    if (-not (Test-Path -LiteralPath $RecoveryReceipt)) {
+                        Write-Warning "A previous update may have been interrupted; recovery files remain in $Target. Review them before removing anything."
+                        break
+                    }
+                }
+            }
             $Items = @(Get-ChildItem -LiteralPath $Source -Force)
             # Windows release bin/ is flat. Refuse directories and links rather
             # than recursively retiring unknown contents under a matching name.
