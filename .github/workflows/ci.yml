@@ -375,6 +375,9 @@ jobs:
       - name: install.ps1 supports WALLY_INSTALL_VERSION / WALLY_INSTALL_BASE_URL
         shell: pwsh
         run: scripts/test/test-install-ps1-overrides.ps1
+      - name: Windows update preserves unrelated files and rollback backups
+        shell: pwsh
+        run: scripts/test/test-update-in-place.ps1 -Binary ./build/wally.exe
 
   windows:
     runs-on: windows-2022
@@ -440,3 +443,6 @@ jobs:
       - name: install.ps1 supports WALLY_INSTALL_VERSION / WALLY_INSTALL_BASE_URL
         shell: pwsh
         run: scripts/test/test-install-ps1-overrides.ps1
+      - name: Windows update preserves unrelated files and rollback backups
+        shell: pwsh
+        run: scripts/test/test-update-in-place.ps1 -Binary ./build/wally.exe
