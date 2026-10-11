@@ -50,6 +50,19 @@ function Fail([string]$Message) {
 # release, preserving other files and legacy .old backups. A unique backup name
 # avoids collisions with user backups. Only a committed receipt authorizes a
 # later startup to delete backups; failed/interrupted updates keep recovery files.
+<#
+.SYNOPSIS
+Replaces only files supplied by a verified release in an existing Windows install.
+.DESCRIPTION
+Serializes the transaction, preserves unrelated files, and publishes a receipt
+only after every replacement succeeds. A later startup may clean up only the
+backups named and hashed in that receipt. Failed or interrupted updates leave
+their recovery files available for manual inspection.
+.PARAMETER Source
+Directory containing the flat, verified release files.
+.PARAMETER Target
+Existing installation directory to update.
+#>
 function Update-InPlace([string]$Source, [string]$Target) {
     # Serialize replacements so another installer cannot invalidate rollback.
     $Lock = [IO.File]::Open((Join-Path $Target '.wally-update.lock'),

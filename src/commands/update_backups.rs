@@ -26,6 +26,8 @@ struct Backup {
     sha256: String,
 }
 
+/// Opens a regular file without following a link and prevents replacement
+/// while its contents are verified and the opened object is deleted.
 fn locked_regular_file(path: &Path) -> Option<fs::File> {
     // Deny writes and replacement from open through verification and deletion.
     // Inspect the opened object, not a pathname which could have changed.
@@ -40,6 +42,8 @@ fn locked_regular_file(path: &Path) -> Option<fs::File> {
         .then_some(file)
 }
 
+/// Requests deletion of the already verified file through its held handle.
+/// The file disappears when the final handle closes.
 fn mark_for_delete(file: &fs::File) -> bool {
     let info = FILE_DISPOSITION_INFO { DeleteFile: true };
     // SAFETY: File owns a live handle with DELETE access. The buffer and size
@@ -54,11 +58,13 @@ fn mark_for_delete(file: &fs::File) -> bool {
     }
 }
 
+/// Accepts only a committed receipt filename with a 32-digit hexadecimal ID.
 fn receipt_id(name: &str) -> Option<&str> {
     let id = name.strip_prefix(".wally-update-")?.strip_suffix(".json")?;
     (id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit())).then_some(id)
 }
 
+/// Checks that one receipt entry names a flat backup owned by the same update.
 fn valid_backup(backup: &Backup, id: &str) -> bool {
     let suffix = format!(".wally-backup-{id}");
     let Some(original) = backup.name.strip_suffix(&suffix) else {
@@ -74,6 +80,8 @@ fn valid_backup(backup: &Backup, id: &str) -> bool {
         && backup.sha256.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
+/// Removes only backups authorized by complete, valid receipts in `dir`.
+/// Invalid, changed, locked, or interrupted-update files remain for review.
 pub(super) fn sweep(dir: &Path) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
@@ -138,6 +146,7 @@ mod tests {
 
     const ID: &str = "0123456789abcdef0123456789abcdef";
 
+    /// Writes a matching backup and committed receipt in a disposable directory.
     fn fixture(dir: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
         let name = format!("wally.exe.wally-backup-{ID}");
         let backup = dir.join(&name);
@@ -150,6 +159,7 @@ mod tests {
         (backup, receipt)
     }
 
+    /// Authorized cleanup leaves unrelated files and old backup names alone.
     #[test]
     fn committed_cleanup_preserves_unrecorded_and_legacy_backups() {
         let dir = tempfile::tempdir().unwrap();
@@ -172,6 +182,7 @@ mod tests {
         }
     }
 
+    /// A pending receipt never authorizes deletion of an interrupted backup.
     #[test]
     fn interrupted_update_has_no_cleanup_authorization() {
         let dir = tempfile::tempdir().unwrap();
@@ -181,6 +192,7 @@ mod tests {
         assert!(backup.exists());
     }
 
+    /// Changed content and open handles delay cleanup until a later safe pass.
     #[test]
     fn changed_or_locked_backup_survives_until_safe_to_remove() {
         let dir = tempfile::tempdir().unwrap();
@@ -204,6 +216,7 @@ mod tests {
         assert!(!receipt.exists());
     }
 
+    /// The held handle blocks content changes and pathname replacement.
     #[test]
     fn hash_verification_blocks_writes_and_path_replacement() {
         let dir = tempfile::tempdir().unwrap();
@@ -220,6 +233,7 @@ mod tests {
         assert!(!backup.exists());
     }
 
+    /// One malformed receipt entry invalidates the entire cleanup batch.
     #[test]
     fn invalid_receipt_never_authorizes_partial_cleanup() {
         let dir = tempfile::tempdir().unwrap();
@@ -246,6 +260,7 @@ mod tests {
         assert!(backup.exists());
     }
 
+    /// A directory at a recorded backup path remains untouched.
     #[test]
     fn directory_at_recorded_path_is_never_removed() {
         let dir = tempfile::tempdir().unwrap();

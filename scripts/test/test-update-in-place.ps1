@@ -17,6 +17,12 @@ foreach ($Definition in $Ast.FindAll({ param($Node)
 $Work = Join-Path ([IO.Path]::GetTempPath()) ('wally-update-test-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $Work | Out-Null
 function Assert([bool]$Condition, [string]$Message) { if (-not $Condition) { throw $Message }; Write-Host "ok $Message" }
+<#
+.SYNOPSIS
+Creates an isolated update fixture with release files and unrelated files.
+.PARAMETER Name
+Name of the fixture directory under this test run's temporary root.
+#>
 function Fixture([string]$Name) {
     $Dir = Join-Path $Work $Name
     $Source = Join-Path $Dir 'source'
