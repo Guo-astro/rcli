@@ -297,9 +297,11 @@ pub fn without_images(anthropic: Value, model: &str) -> Value {
     copy
 }
 
-/// DeepSeek accepts at most this many images in one request. The request is
-/// the whole session, so pictures pasted in earlier turns count toward it.
-pub const DEEPSEEK_MAX_IMAGES: usize = 8;
+/// Hosted vision models accept at most this many images in one request. The
+/// request is the whole session, so pictures pasted in earlier turns count.
+/// MiMo never reaches this: it takes no images, and those are refused or noted
+/// before the request is sent.
+pub const MAX_IMAGES_PER_REQUEST: usize = 8;
 
 /// Drop the oldest images that are not in the latest user turn until the
 /// request holds at most `limit` images. The pictures in the message being
@@ -360,6 +362,68 @@ pub fn within_image_limit(mut anthropic: Value, limit: usize) -> Value {
         }
     }
     anthropic
+}
+
+/// An OpenAI chat body with the oldest images that are not in the latest user
+/// message removed until at most `limit` images remain. The pictures in the
+/// message being sent stay. A message that itself has more than `limit`
+/// images is left alone.
+pub fn within_openai_image_limit(mut body: Value, limit: usize) -> Value {
+    let Some(messages) = body.get("messages").and_then(Value::as_array) else {
+        return body;
+    };
+    let latest_user = messages
+        .iter()
+        .rposition(|message| field(message, "role") == "user");
+    let mut images = Vec::new();
+    for (message_index, message) in messages.iter().enumerate() {
+        let Some(parts) = message.get("content").and_then(Value::as_array) else {
+            continue;
+        };
+        for (part_index, part) in parts.iter().enumerate() {
+            if matches!(field(part, "type").as_str(), "image_url" | "image") {
+                images.push((message_index, part_index, Some(message_index) == latest_user));
+            }
+        }
+    }
+    let current = images.iter().filter(|image| image.2).count();
+    if images.len() <= limit || current > limit {
+        return body;
+    }
+    let drop_old = images.iter().filter(|image| !image.2).count() - (limit - current);
+    let drop: Vec<_> = images.into_iter().filter(|image| !image.2).take(drop_old).collect();
+    let note = json!({
+        "type": "text",
+        "text": format!("[earlier image omitted: this model takes at most {limit} images in one request]")
+    });
+    let messages = body.get_mut("messages").and_then(Value::as_array_mut).expect("messages");
+    for (message_index, part_index, _) in drop {
+        messages[message_index]
+            .get_mut("content")
+            .and_then(Value::as_array_mut)
+            .expect("content")[part_index] = note.clone();
+    }
+    body
+}
+
+/// MiMo takes no images. Every image part becomes a note so the request is
+/// not refused for a picture pasted earlier in the session.
+pub fn without_openai_images(mut body: Value) -> Value {
+    let note = json!({"type": "text", "text": "[image omitted: this model does not take image input]"});
+    let Some(messages) = body.get_mut("messages").and_then(Value::as_array_mut) else {
+        return body;
+    };
+    for message in messages {
+        let Some(parts) = message.get_mut("content").and_then(Value::as_array_mut) else {
+            continue;
+        };
+        for part in parts.iter_mut() {
+            if matches!(field(part, "type").as_str(), "image_url" | "image") {
+                *part = note.clone();
+            }
+        }
+    }
+    body
 }
 
 /// Why an image in `anthropic` cannot be sent at all, or None: its source is
@@ -1500,7 +1564,7 @@ mod tests {
             messages.push(json!({"role": "assistant", "content": format!("saw {index}")}));
         }
         messages.push(json!({"role": "user", "content": [png_block(), {"type": "text", "text": "and this"}]}));
-        let trimmed = within_image_limit(json!({"messages": messages}), DEEPSEEK_MAX_IMAGES);
+        let trimmed = within_image_limit(json!({"messages": messages}), MAX_IMAGES_PER_REQUEST);
         let turns = trimmed["messages"].as_array().unwrap();
         assert_eq!(turns[0]["content"][0]["type"], "text");
         assert_eq!(turns.last().unwrap()["content"][0]["type"], "image");
@@ -1512,7 +1576,22 @@ mod tests {
                     .is_some_and(|blocks| blocks.iter().any(|block| field(block, "type") == "image"))
             })
             .count();
-        assert_eq!(kept, DEEPSEEK_MAX_IMAGES);
+        assert_eq!(kept, MAX_IMAGES_PER_REQUEST);
+    }
+
+    #[test]
+    fn an_openai_session_keeps_the_newest_images() {
+        let image = |url: &str| json!({"type": "image_url", "image_url": {"url": url}});
+        let mut messages = Vec::new();
+        for index in 0..8 {
+            messages.push(json!({"role": "user", "content": [image(&format!("old-{index}"))]}));
+            messages.push(json!({"role": "assistant", "content": "ok"}));
+        }
+        messages.push(json!({"role": "user", "content": [image("new")]}));
+        let trimmed = within_openai_image_limit(json!({"model": "glm-5.3-flash", "messages": messages}), 8);
+        let turns = trimmed["messages"].as_array().unwrap();
+        assert_eq!(turns[0]["content"][0]["type"], "text");
+        assert_eq!(turns.last().unwrap()["content"][0]["image_url"]["url"], "new");
     }
 
     #[test]

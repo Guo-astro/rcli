@@ -1099,12 +1099,7 @@ fn handle_messages_route(
     let parsed = if text_only {
         translate::without_images(parsed, &effective)
     } else {
-        parsed
-    };
-    let parsed = if effective.to_ascii_lowercase().contains("deepseek") {
-        translate::within_image_limit(parsed, translate::DEEPSEEK_MAX_IMAGES)
-    } else {
-        parsed
+        translate::within_image_limit(parsed, translate::MAX_IMAGES_PER_REQUEST)
     };
     if let Some(problem) = problem {
         let payload = translate::error_body("invalid_request_error", &problem);

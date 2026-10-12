@@ -6,6 +6,7 @@ pub mod catalog_models;
 pub mod declared_harness;
 #[allow(clippy::module_inception)]
 pub mod harness;
+pub mod image_gate;
 pub mod local_models;
 pub mod opencode;
 pub mod path_reload;

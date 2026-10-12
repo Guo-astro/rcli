@@ -18,13 +18,14 @@ use super::harness::{launch, release, resolve, Endpoint};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Handoff {
     /// The one handoff that declares no harness (`X-RA-Harness`): Hermes takes
-    /// extra request headers only from `config.yaml`, never the environment,
-    /// and wally does not write that file.
+    /// extra request headers only from `config.yaml`, never the environment.
+    /// Wally does not write those headers. It does set `model.supports_vision`
+    /// in that file, because Hermes reads vision from there and from nowhere else.
     CustomEndpointEnvironment,
     ConfigFile,
     PatchOverlay,
-    /// A temp extension, loaded with `-e`, that registers our provider for
-    /// the one run. Nothing is written into the person's own agent directory.
+    /// Prime Agent 0.10 has no `-e` extension flag. The provider is written
+    /// into `models.json` in the agent directory.
     Extension,
 }
 
@@ -553,6 +554,8 @@ struct ModelLimits {
     max_output: i64,
     input_per_mtok: i64,
     output_per_mtok: i64,
+    image_input: bool,
+    text_only: bool,
 }
 
 fn lookup_limits(endpoint: &Endpoint, model: &str) -> ModelLimits {
@@ -579,6 +582,9 @@ fn lookup_limits(endpoint: &Endpoint, model: &str) -> ModelLimits {
         if let Some(info) = models.iter().find(|m| m.id == model) {
             limits.context_window = info.context_window;
             limits.max_output = info.max_output_tokens;
+            limits.image_input = info.input_modalities.iter().any(|m| m == "image");
+            limits.text_only =
+                !info.input_modalities.is_empty() && !limits.image_input;
         }
     } else {
         out::status_line(&format!(
@@ -693,6 +699,323 @@ pub fn hermes_argv(model: &str, child_args: &[String]) -> Vec<String> {
     ];
     argv.extend(child_args.iter().cloned());
     argv
+}
+
+/// `~/.hermes/config.yaml`, or `$HERMES_HOME/config.yaml` when that is set.
+/// Hermes has no config-path flag; this is the file it actually reads.
+pub fn hermes_config_path() -> Option<PathBuf> {
+    if let Some(home) = std::env::var_os("HERMES_HOME") {
+        if !home.is_empty() {
+            return Some(PathBuf::from(home).join("config.yaml"));
+        }
+    }
+    effective_home().map(|home| PathBuf::from(home).join(".hermes").join("config.yaml"))
+}
+
+/// Why a config could not take `model.supports_vision`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HermesVisionEdit {
+    /// `model:` is a single value, not a mapping. Rewriting it would drop
+    /// whatever that value is.
+    ModelIsScalar,
+}
+
+/// Sets `model.supports_vision` in a Hermes `config.yaml` document.
+///
+/// Hermes decides image input from that key alone. A fresh `HERMES_HOME`
+/// would hide the person's sessions and skills, so the edit stays inside the
+/// document they already have: one key, everything else byte for byte.
+/// `Err` when `model` is a scalar and there is no mapping to put the key in.
+pub fn set_hermes_supports_vision(
+    config: &str,
+    enabled: bool,
+) -> Result<String, HermesVisionEdit> {
+    let want = if enabled { "true" } else { "false" };
+    let lines = split_keep_newlines(config);
+    let Some(model_at) = lines.iter().position(|line| {
+        model_line_kind(&line_body(line)) == Some(ModelLineKind::Block)
+            || model_line_kind(&line_body(line)) == Some(ModelLineKind::Inline)
+    }) else {
+        if lines.iter().any(|line| model_line_kind(&line_body(line)) == Some(ModelLineKind::Scalar))
+        {
+            return Err(HermesVisionEdit::ModelIsScalar);
+        }
+        let mut out = config.to_string();
+        if !out.is_empty() && !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push_str("model:\n  supports_vision: ");
+        out.push_str(want);
+        out.push('\n');
+        return Ok(out);
+    };
+
+    match model_line_kind(&line_body(&lines[model_at])) {
+        Some(ModelLineKind::Inline) => {
+            let mut out = lines;
+            out[model_at] = set_inline_supports_vision(&out[model_at], want);
+            Ok(out.concat())
+        }
+        Some(ModelLineKind::Block) => {
+            let end = lines
+                .iter()
+                .skip(model_at + 1)
+                .position(|line| is_top_level_key(&line_body(line)))
+                .map(|offset| model_at + 1 + offset)
+                .unwrap_or(lines.len());
+            let mut out = lines;
+            let indent = out[model_at + 1..end]
+                .iter()
+                .find_map(|line| {
+                    let body = line_body(line);
+                    if body.trim().is_empty() || body.trim_start().starts_with('#') {
+                        return None;
+                    }
+                    Some(body[..body.len() - body.trim_start().len()].to_string())
+                })
+                .unwrap_or_else(|| "  ".to_string());
+            if let Some(found) = out[model_at + 1..end].iter().position(|line| {
+                let body = line_body(line);
+                line_key(body) == Some("supports_vision") && body.starts_with(&indent)
+            }) {
+                let index = model_at + 1 + found;
+                out[index] = replace_yaml_value(&out[index], want);
+            } else {
+                let newline = if out[model_at].ends_with("\r\n") {
+                    "\r\n"
+                } else if out[model_at].ends_with('\n') {
+                    "\n"
+                } else {
+                    "\n"
+                };
+                out.insert(
+                    model_at + 1,
+                    format!("{indent}supports_vision: {want}{newline}"),
+                );
+            }
+            Ok(out.concat())
+        }
+        _ => Err(HermesVisionEdit::ModelIsScalar),
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ModelLineKind {
+    Block,
+    Inline,
+    Scalar,
+}
+
+fn split_keep_newlines(config: &str) -> Vec<String> {
+    if config.is_empty() {
+        return Vec::new();
+    }
+    let mut lines = Vec::new();
+    let mut rest = config;
+    while !rest.is_empty() {
+        if let Some(index) = rest.find('\n') {
+            let end = index + 1;
+            lines.push(rest[..end].to_string());
+            rest = &rest[end..];
+        } else {
+            lines.push(rest.to_string());
+            break;
+        }
+    }
+    lines
+}
+
+fn line_body(line: &str) -> &str {
+    line.trim_end_matches(['\n', '\r'])
+}
+
+fn model_line_kind(body: &str) -> Option<ModelLineKind> {
+    if is_comment_or_blank(body) || body.starts_with([' ', '\t']) {
+        return None;
+    }
+    let rest = body.strip_prefix("model:")?;
+    let rest = strip_yaml_comment(rest).trim();
+    if rest.is_empty() {
+        Some(ModelLineKind::Block)
+    } else if rest.starts_with('{') {
+        Some(ModelLineKind::Inline)
+    } else {
+        Some(ModelLineKind::Scalar)
+    }
+}
+
+fn is_top_level_key(body: &str) -> bool {
+    if is_comment_or_blank(body) || body.starts_with([' ', '\t']) {
+        return false;
+    }
+    let key = body.split(':').next().unwrap_or("");
+    !key.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+fn is_comment_or_blank(body: &str) -> bool {
+    let trimmed = body.trim();
+    trimmed.is_empty() || trimmed.starts_with('#')
+}
+
+fn line_key(body: &str) -> Option<&str> {
+    let trimmed = body.trim_start();
+    if trimmed.is_empty() || trimmed.starts_with('#') {
+        return None;
+    }
+    let key = trimmed.split(':').next()?.trim();
+    if key.is_empty() {
+        None
+    } else {
+        Some(key)
+    }
+}
+
+fn strip_yaml_comment(text: &str) -> &str {
+    let mut in_single = false;
+    let mut in_double = false;
+    for (index, ch) in text.char_indices() {
+        match ch {
+            '\'' if !in_double => in_single = !in_single,
+            '"' if !in_single => in_double = !in_double,
+            '#' if !in_single && !in_double => return &text[..index],
+            _ => {}
+        }
+    }
+    text
+}
+
+fn replace_yaml_value(line: &str, want: &str) -> String {
+    let body = line_body(line);
+    let Some(colon) = body.find(':') else {
+        return line.to_string();
+    };
+    let after = &body[colon + 1..];
+    let commented = strip_yaml_comment(after);
+    let token = commented.trim().trim_matches(|c| c == '"' || c == '\'');
+    if token == want {
+        return line.to_string();
+    }
+    let token_at = commented.find(token).unwrap_or(0);
+    let absolute = colon + 1 + token_at;
+    let mut out = String::new();
+    out.push_str(&body[..absolute]);
+    out.push_str(want);
+    out.push_str(&body[absolute + token.len()..]);
+    if line.ends_with("\r\n") {
+        out.push_str("\r\n");
+    } else if line.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
+fn set_inline_supports_vision(line: &str, want: &str) -> String {
+    let body = line_body(line);
+    let Some(open) = body.find('{') else {
+        return line.to_string();
+    };
+    let Some(close) = body.rfind('}') else {
+        return line.to_string();
+    };
+    if close < open {
+        return line.to_string();
+    }
+    let inner = &body[open + 1..close];
+    if inline_vision_is(inner, want) {
+        return line.to_string();
+    }
+    let mut parts: Vec<String> = Vec::new();
+    let mut replaced = false;
+    for part in split_inline_fields(inner) {
+        let trimmed = part.trim();
+        if trimmed.split(':').next().unwrap_or("").trim() == "supports_vision" {
+            parts.push(format!("supports_vision: {want}"));
+            replaced = true;
+        } else if !trimmed.is_empty() {
+            parts.push(trimmed.to_string());
+        }
+    }
+    if !replaced {
+        parts.push(format!("supports_vision: {want}"));
+    }
+    let mut out = String::new();
+    out.push_str(&body[..open + 1]);
+    if !parts.is_empty() {
+        out.push(' ');
+        out.push_str(&parts.join(", "));
+        out.push(' ');
+    }
+    out.push_str(&body[close..]);
+    if line.ends_with("\r\n") {
+        out.push_str("\r\n");
+    } else if line.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
+fn inline_vision_is(inner: &str, want: &str) -> bool {
+    split_inline_fields(inner).iter().any(|part| {
+        let trimmed = part.trim();
+        let mut pieces = trimmed.splitn(2, ':');
+        if pieces.next().unwrap_or("").trim() != "supports_vision" {
+            return false;
+        }
+        let value = strip_yaml_comment(pieces.next().unwrap_or("")).trim();
+        value.trim_matches(|c| c == '"' || c == '\'') == want
+    })
+}
+
+fn split_inline_fields(inner: &str) -> Vec<String> {
+    let mut fields = Vec::new();
+    let mut start = 0;
+    let mut depth = 0;
+    let mut in_single = false;
+    let mut in_double = false;
+    for (index, ch) in inner.char_indices() {
+        match ch {
+            '\'' if !in_double => in_single = !in_single,
+            '"' if !in_single => in_double = !in_double,
+            '{' | '[' if !in_single && !in_double => depth += 1,
+            '}' | ']' if !in_single && !in_double && depth > 0 => depth -= 1,
+            ',' if !in_single && !in_double && depth == 0 => {
+                fields.push(inner[start..index].to_string());
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    fields.push(inner[start..].to_string());
+    fields
+}
+
+fn write_hermes_supports_vision(enabled: bool) {
+    let Some(path) = hermes_config_path() else {
+        out::status_line("could not find a home directory, so hermes was not told whether this model takes images");
+        return;
+    };
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let updated = match set_hermes_supports_vision(&existing, enabled) {
+        Ok(updated) => updated,
+        Err(HermesVisionEdit::ModelIsScalar) => {
+            out::status_line(
+                "hermes config.yaml has model as a single value, so wally could not set model.supports_vision",
+            );
+            return;
+        }
+    };
+    if updated == existing {
+        return;
+    }
+    if let Some(parent) = path.parent() {
+        if std::fs::create_dir_all(parent).is_err() {
+            out::status_line("could not create the hermes config directory");
+            return;
+        }
+    }
+    if std::fs::write(&path, updated).is_err() {
+        out::status_line("could not tell hermes whether this model takes images");
+    }
 }
 
 /// ISO-8601 UTC "now" (`%Y-%m-%dT%H:%M:%SZ`). OpenClaw treats a non-empty
@@ -824,7 +1147,11 @@ pub fn build_deep_seek_llm_config(
 ) -> String {
     let mut entries: Vec<Value> = Vec::new();
     for model in models {
-        let mut entry = json!({ "id": model.id, "name": model.id });
+        let mut entry = json!({
+            "id": model.id,
+            "name": model.id,
+            "input": input_modalities(model),
+        });
         if model.context_window > 0 {
             entry["contextWindow"] = json!(model.context_window);
             let max_tokens = if model.max_output > 0 {
@@ -855,15 +1182,18 @@ pub fn build_deep_seek_llm_config(
     dump(&json!({ "providers": { PROVIDER_ID: provider } }))
 }
 
-/// The Prime Agent extension that registers our provider. The provider is a
-/// JSON literal, which is also a valid JavaScript expression, so every value
-/// is escaped by the serializer rather than by hand. `apiKey` names the
-/// variable holding the key, not the key.
-pub fn build_prime_agent_extension(
+/// `models.json` for Prime Agent 0.10. The Rust build dropped `-e`, and a
+/// custom provider is this document: `baseUrl`, `api`, `apiKey`, and the
+/// model list. Other providers already in `existing` stay. `apiKey` is the
+/// key itself. The daemon resolves an env-var name only when that variable
+/// is set in the daemon, and a daemon that is already running was not
+/// started with ours.
+pub fn build_prime_agent_models_config(
+    existing: &str,
     base_url: &str,
-    key_variable: &str,
+    api_key: &str,
     models: &[CatalogModel],
-) -> String {
+) -> Result<String, String> {
     let mut entries: Vec<Value> = Vec::new();
     for model in models {
         let mut entry = json!({
@@ -896,25 +1226,39 @@ pub fn build_prime_agent_extension(
         }
         entries.push(entry);
     }
-    let provider = json!({
+    let mut config: Value = if existing.trim().is_empty() {
+        json!({})
+    } else {
+        serde_json::from_str(existing).map_err(|err| format!("prime-agent models.json: {err}"))?
+    };
+    if !config.is_object() {
+        return Err("prime-agent models.json is not an object".to_string());
+    }
+    config["providers"][PROVIDER_ID] = json!({
         "name": "RunAnywhere",
         "baseUrl": base_url,
-        "apiKey": key_variable,
+        "apiKey": api_key,
         "api": "openai-completions",
         "models": entries,
     });
-    format!(
-        "export default function (pi) {{\n  pi.registerProvider({}, {});\n}}\n",
-        dump(&json!(PROVIDER_ID)),
-        dump(&provider)
-    )
+    Ok(dump(&config))
 }
 
-/// `-e <extension> --model runanywhere/<model>`, then their own arguments.
-pub fn prime_agent_argv(extension: &str, model: &str, child_args: &[String]) -> Vec<String> {
+/// Prime Agent's agent directory: `$PRIME_AGENT_CODING_AGENT_DIR`, otherwise
+/// `~/.prime/agent`. `models.json` lives directly in it.
+pub fn prime_agent_dir() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("PRIME_AGENT_CODING_AGENT_DIR") {
+        if !dir.is_empty() {
+            return Some(PathBuf::from(dir));
+        }
+    }
+    effective_home().map(|home| PathBuf::from(home).join(".prime").join("agent"))
+}
+
+/// `--model runanywhere/<model>`, then their own arguments. 0.10 rejects
+/// `-e`; the provider has to already be in `models.json`.
+pub fn prime_agent_argv(model: &str, child_args: &[String]) -> Vec<String> {
     let mut argv = vec![
-        "-e".to_string(),
-        extension.to_string(),
         "--model".to_string(),
         format!("{PROVIDER_ID}/{model}"),
     ];
@@ -1012,6 +1356,11 @@ pub fn launch_agent(agent: &Agent, model: &str, args: &[String], options: &Globa
             // not injected — see `hermes_context_hint`'s doc comment for why
             // there is nothing for wally to write instead.
             let limits = lookup_limits(&endpoint, model);
+            // Unknown modalities stay unset: a failed catalog read must not
+            // mark a model text-only, or vision, on a guess.
+            if limits.image_input || limits.text_only {
+                write_hermes_supports_vision(limits.image_input);
+            }
             let hint = hermes_context_hint(limits.context_window);
             if !hint.is_empty() {
                 out::status_line(&hint);
@@ -1132,13 +1481,46 @@ pub fn launch_agent(agent: &Agent, model: &str, args: &[String], options: &Globa
                     catalog[0].context_window
                 ));
             }
-            let built = build_prime_agent_extension(&endpoint.base_url, KEY_VARIABLE, &catalog);
-            if let Err(failure) = config.write(&built, ".js") {
-                out::error_line(&failure);
+            let Some(dir) = prime_agent_dir() else {
+                out::error_line("could not find a home directory for prime-agent");
+                release(&endpoint);
+                return 1;
+            };
+            let models_path = dir.join("models.json");
+            let existing = std::fs::read_to_string(&models_path).unwrap_or_default();
+            let key_value = key_or_placeholder(&endpoint.api_key);
+            let built = match build_prime_agent_models_config(
+                &existing,
+                &endpoint.base_url,
+                key_value,
+                &catalog,
+            ) {
+                Ok(built) => built,
+                Err(failure) => {
+                    out::error_line(&failure);
+                    release(&endpoint);
+                    return 1;
+                }
+            };
+            if std::fs::create_dir_all(&dir).is_err() {
+                out::error_line("could not create the prime-agent config directory");
                 release(&endpoint);
                 return 1;
             }
-            let key = ScopedEnv::new(KEY_VARIABLE, key_or_placeholder(&endpoint.api_key));
+            if std::fs::write(&models_path, built).is_err() {
+                out::error_line("could not write prime-agent models.json");
+                release(&endpoint);
+                return 1;
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(
+                    &models_path,
+                    std::fs::Permissions::from_mode(0o600),
+                );
+            }
+            let key = ScopedEnv::new(KEY_VARIABLE, key_value);
             if !key.applied() {
                 out::error_line(&format!("could not set the endpoint for {}", agent.id));
                 release(&endpoint);
@@ -1151,7 +1533,7 @@ pub fn launch_agent(agent: &Agent, model: &str, args: &[String], options: &Globa
             launch(
                 agent.command,
                 "",
-                &prime_agent_argv(&config.path(), model, &child_args),
+                &prime_agent_argv(model, &child_args),
                 options,
             )
         }
@@ -1698,7 +2080,7 @@ mod tests {
     }
 
     #[test]
-    fn prime_agent_extension_registers_our_provider_without_the_key() {
+    fn prime_agent_models_config_registers_our_provider_and_keeps_theirs() {
         let models = [CatalogModel {
             id: "glm-5.3-flash".to_string(),
             context_window: 200_000,
@@ -1709,18 +2091,22 @@ mod tests {
             image_input: false,
             text_only: false,
         }];
-        let built = build_prime_agent_extension("https://example.test/v1", KEY_VARIABLE, &models);
-        let json = built
-            .strip_prefix("export default function (pi) {\n  pi.registerProvider(\"runanywhere\", ")
-            .and_then(|rest| rest.strip_suffix(");\n}\n"))
-            .expect("the extension wraps one registerProvider call");
-        let provider: Value = serde_json::from_str(json).unwrap();
+        let built = build_prime_agent_models_config(
+            r#"{"providers":{"openai":{"apiKey":"theirs"}}}"#,
+            "https://example.test/v1",
+            "test-key",
+            &models,
+        )
+        .unwrap();
+        let doc: Value = serde_json::from_str(&built).unwrap();
+        let provider = &doc["providers"]["runanywhere"];
         assert_eq!(provider["baseUrl"], "https://example.test/v1");
-        assert_eq!(provider["apiKey"], "RUNANYWHERE_API_KEY");
+        assert_eq!(provider["apiKey"], "test-key");
         assert_eq!(provider["api"], "openai-completions");
         assert_eq!(provider["models"][0]["id"], "glm-5.3-flash");
         assert_eq!(provider["models"][0]["contextWindow"], 200_000);
         assert_eq!(provider["models"][0]["maxTokens"], 16_384);
+        assert_eq!(doc["providers"]["openai"]["apiKey"], "theirs");
     }
 
     #[test]
@@ -1748,32 +2134,35 @@ mod tests {
         assert_eq!(claw_models[0]["input"], json!(["text", "image"]));
         assert_eq!(claw_models[1]["input"], json!(["text"]));
 
-        let built = build_prime_agent_extension("https://example.test/v1", KEY_VARIABLE, &models);
-        let json = built
-            .strip_prefix("export default function (pi) {\n  pi.registerProvider(\"runanywhere\", ")
-            .and_then(|rest| rest.strip_suffix(");\n}\n"))
-            .expect("the extension wraps one registerProvider call");
-        let provider: Value = serde_json::from_str(json).unwrap();
+        let built = build_prime_agent_models_config(
+            "",
+            "https://example.test/v1",
+            KEY_VARIABLE,
+            &models,
+        )
+        .unwrap();
+        let provider: Value = serde_json::from_str(&built).unwrap();
+        let provider = &provider["providers"]["runanywhere"];
         assert_eq!(provider["models"][0]["input"], json!(["text", "image"]));
         assert_eq!(provider["models"][1]["input"], json!(["text"]));
+
+        let deepseek: Value = serde_json::from_str(&build_deep_seek_llm_config(
+            "https://example.test/v1",
+            KEY_VARIABLE,
+            &models,
+        ))
+        .unwrap();
+        let deepseek_models = &deepseek["providers"]["runanywhere"]["models"];
+        assert_eq!(deepseek_models[0]["input"], json!(["text", "image"]));
+        assert_eq!(deepseek_models[1]["input"], json!(["text"]));
     }
 
     #[test]
-    fn prime_agent_argv_names_the_extension_and_model_before_theirs() {
-        let argv = prime_agent_argv(
-            "/tmp/wally-agent-1.js",
-            "glm-5.3-flash",
-            &["-c".to_string()],
-        );
+    fn prime_agent_argv_names_the_model_before_theirs() {
+        let argv = prime_agent_argv("glm-5.3-flash", &["-c".to_string()]);
         assert_eq!(
             argv,
-            [
-                "-e",
-                "/tmp/wally-agent-1.js",
-                "--model",
-                "runanywhere/glm-5.3-flash",
-                "-c"
-            ]
+            ["--model", "runanywhere/glm-5.3-flash", "-c"]
         );
     }
 }
