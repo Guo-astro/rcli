@@ -297,6 +297,71 @@ pub fn without_images(anthropic: Value, model: &str) -> Value {
     copy
 }
 
+/// DeepSeek accepts at most this many images in one request. The request is
+/// the whole session, so pictures pasted in earlier turns count toward it.
+pub const DEEPSEEK_MAX_IMAGES: usize = 8;
+
+/// Drop the oldest images that are not in the latest user turn until the
+/// request holds at most `limit` images. The pictures in the message being
+/// sent stay. A turn that itself has more than `limit` images is left alone.
+pub fn within_image_limit(mut anthropic: Value, limit: usize) -> Value {
+    let Some(messages) = anthropic.get("messages").and_then(Value::as_array) else {
+        return anthropic;
+    };
+    let latest_user = messages
+        .iter()
+        .rposition(|message| matches!(field(message, "role").as_str(), "user" | ""));
+    let mut images = Vec::new();
+    for (message_index, message) in messages.iter().enumerate() {
+        let Some(blocks) = message.get("content").and_then(Value::as_array) else {
+            continue;
+        };
+        for (block_index, block) in blocks.iter().enumerate() {
+            if field(block, "type") == "image" {
+                images.push((message_index, block_index, None, Some(message_index) == latest_user));
+            }
+            if field(block, "type") == "tool_result" {
+                if let Some(inner) = block.get("content").and_then(Value::as_array) {
+                    for (inner_index, inner_block) in inner.iter().enumerate() {
+                        if field(inner_block, "type") == "image" {
+                            images.push((message_index, block_index, Some(inner_index), false));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let current = images.iter().filter(|image| image.3).count();
+    if images.len() <= limit || current > limit {
+        return anthropic;
+    }
+    let drop_old = images.iter().filter(|image| !image.3).count() - (limit - current);
+    let drop: Vec<_> = images.into_iter().filter(|image| !image.3).take(drop_old).collect();
+    let note = json!({
+        "type": "text",
+        "text": "[earlier image omitted: this model takes at most 8 images in one request]"
+    });
+    let messages = anthropic
+        .get_mut("messages")
+        .and_then(Value::as_array_mut)
+        .expect("messages");
+    for (message_index, block_index, inner_index, _) in drop {
+        let blocks = messages[message_index]
+            .get_mut("content")
+            .and_then(Value::as_array_mut)
+            .expect("content");
+        if let Some(inner_index) = inner_index {
+            blocks[block_index]
+                .get_mut("content")
+                .and_then(Value::as_array_mut)
+                .expect("tool result")[inner_index] = note.clone();
+        } else {
+            blocks[block_index] = note.clone();
+        }
+    }
+    anthropic
+}
+
 /// Why an image in `anthropic` cannot be sent at all, or None: its source is
 /// neither base64 (with a media type) nor a url.
 pub fn image_source_problem(anthropic: &Value) -> Option<String> {
@@ -1422,6 +1487,32 @@ mod tests {
         assert_eq!(cleaned["messages"][1], history["messages"][1]);
         let text = json!({"messages": [{"role": "user", "content": "hi"}]});
         assert_eq!(without_images(text.clone(), "m"), text);
+    }
+
+    /// Eight pictures already in the session do not block the one pasted now.
+    /// DeepSeek counts every image in the request, so the oldest earlier one
+    /// is left out and the new message's picture stays.
+    #[test]
+    fn an_earlier_image_makes_room_for_the_one_just_pasted() {
+        let mut messages = Vec::new();
+        for index in 0..8 {
+            messages.push(json!({"role": "user", "content": [png_block()]}));
+            messages.push(json!({"role": "assistant", "content": format!("saw {index}")}));
+        }
+        messages.push(json!({"role": "user", "content": [png_block(), {"type": "text", "text": "and this"}]}));
+        let trimmed = within_image_limit(json!({"messages": messages}), DEEPSEEK_MAX_IMAGES);
+        let turns = trimmed["messages"].as_array().unwrap();
+        assert_eq!(turns[0]["content"][0]["type"], "text");
+        assert_eq!(turns.last().unwrap()["content"][0]["type"], "image");
+        let kept = turns
+            .iter()
+            .filter(|turn| {
+                turn["content"]
+                    .as_array()
+                    .is_some_and(|blocks| blocks.iter().any(|block| field(block, "type") == "image"))
+            })
+            .count();
+        assert_eq!(kept, DEEPSEEK_MAX_IMAGES);
     }
 
     #[test]
