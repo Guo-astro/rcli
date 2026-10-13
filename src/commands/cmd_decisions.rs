@@ -1014,7 +1014,7 @@ fn run_local(options: &GlobalOptions, request: &contract::DecisionsRequest, json
         Ok(loaded) => loaded,
         Err(message) => {
             drop(hush);
-            out::error_line(&message);
+            report_failure(json, &account::DecisionsResult::default(), &message);
             return 1;
         }
     };
@@ -1026,7 +1026,7 @@ fn run_local(options: &GlobalOptions, request: &contract::DecisionsRequest, json
             // Teardown prints too: destroy the component while muted.
             drop(loaded);
             drop(hush);
-            out::error_line(&message);
+            report_failure(json, &account::DecisionsResult::default(), &message);
             return 1;
         }
     };
@@ -1036,7 +1036,9 @@ fn run_local(options: &GlobalOptions, request: &contract::DecisionsRequest, json
     drop(hush);
     let latency_ms = started.elapsed().as_millis();
     if json {
-        out::result_line(&crate::io::json::dump(&response.to_json()));
+        out::result_line(&crate::io::json::dump(
+            &account::decisions_output::ResponseMetadata::default().success_json(&response),
+        ));
     } else {
         render_human(request, &response, false);
     }
@@ -1054,7 +1056,7 @@ fn run(p: &crate::cli::Parsed, options: &GlobalOptions, json: bool) -> i32 {
     let mut transport = match transport_from_flags(p) {
         Ok(transport) => transport,
         Err(error) => {
-            out::error_line(&error);
+            report_failure(json, &account::DecisionsResult::default(), &error);
             return 2;
         }
     };
@@ -1065,15 +1067,21 @@ fn run(p: &crate::cli::Parsed, options: &GlobalOptions, json: bool) -> i32 {
     let mut forced_route = None;
     if let Some(route) = p.get_str("--route") {
         if p.flag("--local") || p.flag("--cloud") || p.is_set("--request") {
-            out::error_line("--route cannot be combined with --local, --cloud, or --request");
+            report_failure(
+                json,
+                &account::DecisionsResult::default(),
+                "--route cannot be combined with --local, --cloud, or --request",
+            );
             return 2;
         }
         match preferences::parse_decisions_route(Some(&route)) {
             Some(parsed) => forced_route = Some(parsed),
             None => {
-                out::error_line(&format!(
-                    "decisions route must be 'local' or 'cloud', not '{route}'"
-                ));
+                report_failure(
+                    json,
+                    &account::DecisionsResult::default(),
+                    &format!("decisions route must be 'local' or 'cloud', not '{route}'"),
+                );
                 return 2;
             }
         }
@@ -1081,17 +1089,21 @@ fn run(p: &crate::cli::Parsed, options: &GlobalOptions, json: bool) -> i32 {
     let mut request = match build_request(p) {
         Ok(request) => request,
         Err(error) => {
-            out::error_line(&error);
+            report_failure(json, &account::DecisionsResult::default(), &error);
             return 2;
         }
     };
     if transport == Transport::Local && request.images.is_some() {
-        out::error_line("images are scored on the cloud only: drop --local");
+        report_failure(
+            json,
+            &account::DecisionsResult::default(),
+            "images are scored on the cloud only: drop --local",
+        );
         return 2;
     }
     if let Some(route) = forced_route {
         if let Err(error) = preferences::set_decisions_route(route.name()) {
-            out::error_line(&error);
+            report_failure(json, &account::DecisionsResult::default(), &error);
             return 2;
         }
         out::status_line(&format!("saved decisions route: {}", route.name()));
@@ -1135,7 +1147,9 @@ fn run(p: &crate::cli::Parsed, options: &GlobalOptions, json: bool) -> i32 {
                     transport = Transport::Local;
                 }
                 None => {
-                    out::error_line(
+                    report_failure(
+                        json,
+                        &account::DecisionsResult::default(),
                         "saved decisions route is 'local' but this build cannot score on-device",
                     );
                     return 2;
@@ -1147,14 +1161,14 @@ fn run(p: &crate::cli::Parsed, options: &GlobalOptions, json: bool) -> i32 {
         Transport::Local => match resolve_local_transport(&request.model, options) {
             Ok(true) => true,
             Ok(false) => {
-                out::error_line(&format!(
+                report_failure(json, &account::DecisionsResult::default(), &format!(
                     "local scoring was selected but '{}' does not resolve to a model on this machine",
                     request.model
                 ));
                 return 2;
             }
             Err(error) => {
-                out::error_line(&error);
+                report_failure(json, &account::DecisionsResult::default(), &error);
                 return 1;
             }
         },
@@ -1162,18 +1176,26 @@ fn run(p: &crate::cli::Parsed, options: &GlobalOptions, json: bool) -> i32 {
         Transport::Auto => match resolve_local_transport(&request.model, options) {
             Ok(local) => local,
             Err(error) => {
-                out::error_line(&error);
+                report_failure(json, &account::DecisionsResult::default(), &error);
                 return 1;
             }
         },
     };
     if local {
         if p.is_set("--no-retry") {
-            out::error_line("--no-retry is a cloud-only flag");
+            report_failure(
+                json,
+                &account::DecisionsResult::default(),
+                "--no-retry is a cloud-only flag",
+            );
             return 2;
         }
         if request.images.is_some() {
-            out::error_line("images are scored on the cloud only: drop --local, or add --cloud");
+            report_failure(
+                json,
+                &account::DecisionsResult::default(),
+                "images are scored on the cloud only: drop --local, or add --cloud",
+            );
             return 2;
         }
         // The local path promises no network; bootstrap must not run the
@@ -1188,17 +1210,21 @@ fn run(p: &crate::cli::Parsed, options: &GlobalOptions, json: bool) -> i32 {
     // The hosted console takes a model id, not a path; only the local
     // transport accepts a path, so the id-shape rule gates cloud here.
     if let Err(error) = validate_model_shape(&request.model) {
-        out::error_line(&error);
+        report_failure(json, &account::DecisionsResult::default(), &error);
         return 2;
     }
     let credentials = match account::load() {
         Ok(credentials) if credentials.signed_in() => credentials,
         Ok(_) => {
-            out::error_line("Sign in first: wally account login");
+            report_failure(
+                json,
+                &account::DecisionsResult::default(),
+                "Sign in first: wally account login",
+            );
             return 1;
         }
         Err(error) => {
-            out::error_line(&error);
+            report_failure(json, &account::DecisionsResult::default(), &error);
             return 1;
         }
     };
@@ -1209,13 +1235,13 @@ fn run(p: &crate::cli::Parsed, options: &GlobalOptions, json: bool) -> i32 {
     ) {
         Ok(session) => session,
         Err(error) => {
-            out::error_line(&error);
+            report_failure(json, &account::DecisionsResult::default(), &error);
             return 1;
         }
     };
     let no_retry = p.flag("--no-retry");
     let started = Instant::now();
-    let result = session.call(|client, console_url, access_token| {
+    let result = session.call_preserving_failure(|client, console_url, access_token| {
         client.create_decisions(
             console_url,
             access_token,
@@ -1237,13 +1263,15 @@ fn run(p: &crate::cli::Parsed, options: &GlobalOptions, json: bool) -> i32 {
     let result = match result {
         Ok(result) => result,
         Err(error) => {
-            out::error_line(&error);
+            report_failure(json, &error.value, &error.message);
             return 1;
         }
     };
     let latency_ms = started.elapsed().as_millis();
     if json {
-        out::result_line(&result.raw_json);
+        out::result_line(&crate::io::json::dump(
+            &result.metadata.success_json(&result.response),
+        ));
     } else {
         render_human(&request, &result.response, true);
     }
@@ -1266,6 +1294,24 @@ fn run(p: &crate::cli::Parsed, options: &GlobalOptions, json: bool) -> i32 {
         result.response.model, usage.total_tokens, cost, latency_ms
     ));
     0
+}
+
+fn report_failure(json: bool, result: &account::DecisionsResult, message: &str) {
+    if json {
+        out::result_line(&crate::io::json::dump(
+            &result
+                .metadata
+                .failure_json(result.refusal.as_ref(), message),
+        ));
+    }
+    // Session refresh failures are phrased by the shared session layer; add
+    // the decisions status there too without using a refresh response's ID.
+    match result.metadata.http_status {
+        Some(status) if !message.contains(&format!("HTTP {status}")) => {
+            out::error_line(&format!("{message} (HTTP {status})"));
+        }
+        _ => out::error_line(message),
+    }
 }
 
 pub fn register_decisions(app: &mut App) {
@@ -1317,7 +1363,10 @@ pub fn register_decisions(app: &mut App) {
         ValueType::Float,
         "Probability temperature (>0, at most 100)",
     );
-    cmd.add_flag("--json", "Print the raw response JSON");
+    cmd.add_flag(
+        "--json",
+        "Print result/error JSON with request ID and HTTP status",
+    );
     cmd.add_flag(
         "--local",
         "Score on this machine with a local decision model (never the network)",

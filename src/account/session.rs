@@ -32,6 +32,13 @@ pub struct ConsoleSession {
     now: i64,
 }
 
+/// A failed operation's value may still contain useful response metadata.
+#[derive(Debug)]
+pub struct SessionFailure<T> {
+    pub value: T,
+    pub message: String,
+}
+
 impl ConsoleSession {
     /// The saved session, refreshed first when it is about to expire.
     pub fn open(client: ConsoleClient) -> Result<Self, String> {
@@ -104,8 +111,18 @@ impl ConsoleSession {
     /// again; any other failure is returned as the read phrased it.
     pub fn call<T>(
         &mut self,
-        mut read: impl FnMut(&ConsoleClient, &str, &str) -> (IdentityResult, T, String),
+        read: impl FnMut(&ConsoleClient, &str, &str) -> (IdentityResult, T, String),
     ) -> Result<T, String> {
+        self.call_preserving_failure(read)
+            .map_err(|error| error.message)
+    }
+
+    /// The same refresh rule as `call`, without discarding a failed read's
+    /// value. A failed refresh retains the last operation's value, not auth's.
+    pub fn call_preserving_failure<T>(
+        &mut self,
+        mut read: impl FnMut(&ConsoleClient, &str, &str) -> (IdentityResult, T, String),
+    ) -> Result<T, SessionFailure<T>> {
         let (mut result, mut value, mut failure) = read(
             &self.client,
             &self.credentials.console_url,
@@ -121,12 +138,20 @@ impl ConsoleSession {
                 // A 429 or 5xx on the refresh says nothing about the session,
                 // and logging in again would not get past a console that is
                 // busy. The message already says to try again shortly.
-                Err(e) if e.unavailable => return Err(e.message),
+                Err(e) if e.unavailable => {
+                    return Err(SessionFailure {
+                        value,
+                        message: e.message,
+                    })
+                }
                 Err(e) => {
-                    return Err(format!(
-                        "the console rejected this session ({}); run `wally account login`",
-                        e.message
-                    ))
+                    return Err(SessionFailure {
+                        value,
+                        message: format!(
+                            "the console rejected this session ({}); run `wally account login`",
+                            e.message
+                        ),
+                    })
                 }
             }
             (result, value, failure) = read(
@@ -139,11 +164,11 @@ impl ConsoleSession {
             IdentityResult::Ok => Ok(value),
             // Refused again with a token the console itself just issued: the
             // session is no good, and only signing in again gets a new one.
-            IdentityResult::Unauthorized => Err(
+            IdentityResult::Unauthorized => Err(SessionFailure { value, message:
                 "the console still rejected this session after a refresh; run `wally account login`"
                     .to_string(),
-            ),
-            _ => Err(failure),
+            }),
+            _ => Err(SessionFailure { value, message: failure }),
         }
     }
 }

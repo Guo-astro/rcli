@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 
 use super::console_contract as contract;
 use super::decisions_contract as decisions;
+use super::decisions_output::{DecisionsRefusal, ResponseMetadata};
 use super::{
     UsageRequestRow, UsageRequestsPage, UsageRequestsQuery, UsageRequestsTotals,
     USAGE_REQUESTS_CURSOR_MAX_CHARS,
@@ -269,8 +270,23 @@ pub struct CatalogPrice {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct DecisionsResult {
     pub response: decisions::DecisionsResponse,
-    /// Preserved byte-for-byte for `wally decisions --json`.
-    pub raw_json: String,
+    pub metadata: ResponseMetadata,
+    /// Only contract-parsed, terminal-safe error details may be rendered.
+    pub refusal: Option<DecisionsRefusal>,
+}
+
+struct HttpFailure {
+    message: String,
+    metadata: ResponseMetadata,
+}
+
+impl From<String> for HttpFailure {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            metadata: ResponseMetadata::default(),
+        }
+    }
 }
 
 pub const LOGIN_MAX_WAIT_SECONDS: i32 = 10;
@@ -799,12 +815,14 @@ fn map_transport_error(error: ureq::Error) -> String {
 /// The real network transport: ureq with native-tls (the OS trust store, as
 /// curl and WinHTTP used), env proxies with a loopback bypass, redirects never
 /// followed, TLS verification on (the connector's default).
-fn real_transport(request: &HttpRequest) -> Result<HttpResponse, String> {
+fn real_transport(request: &HttpRequest) -> Result<HttpResponse, HttpFailure> {
     if !super::browser_url_is_safe(&request.url) {
-        return Err("refusing an unsafe console request URL".to_string());
+        return Err("refusing an unsafe console request URL".to_string().into());
     }
     if !request.bearer_token.is_empty() && !super::session_token_is_safe(&request.bearer_token) {
-        return Err("refusing an invalid console bearer token".to_string());
+        return Err("refusing an invalid console bearer token"
+            .to_string()
+            .into());
     }
 
     let total = total_timeout_ms(request);
@@ -852,22 +870,30 @@ fn real_transport(request: &HttpRequest) -> Result<HttpResponse, String> {
             headers.insert(name.as_str().to_string(), text.to_string());
         }
     }
-    let body = response
+    let mut received = HttpResponse {
+        status,
+        headers,
+        body: String::new(),
+    };
+    received.body = response
         .body_mut()
         .with_config()
         .limit(MAX_RESPONSE_BYTES)
         .read_to_string()
-        .map_err(map_transport_error)?;
+        .map_err(|error| HttpFailure {
+            message: map_transport_error(error),
+            metadata: ResponseMetadata::from_response(&received),
+        })?;
 
     if !(100..=599).contains(&status) {
-        return Err("could not reach Wally Cloud - check your internet connection".to_string());
+        return Err(
+            "could not reach Wally Cloud - check your internet connection"
+                .to_string()
+                .into(),
+        );
     }
 
-    Ok(HttpResponse {
-        status,
-        body,
-        headers,
-    })
+    Ok(received)
 }
 
 /// How much of a console's refusal is shown. The contract allows 2048
@@ -906,17 +932,35 @@ fn format_refusal(operation: &str, message: &str) -> String {
 /// person needs; like the usage export's `provider`, an unknown one is lifted
 /// out before parsing (the code then reads as absent, the type as its
 /// default), so the message still reaches the terminal.
-fn decisions_refusal(response: &HttpResponse) -> Option<decisions::OpenAIErrorDetail> {
+fn decisions_refusal(response: &HttpResponse) -> Option<DecisionsRefusal> {
     let mut body = parse_object(response).ok()?;
-    if let Ok(error) = decisions::OpenAIError::from_json(&body) {
-        return Some(error.error);
-    }
     let detail = body.get_mut("error")?.as_object_mut()?;
-    detail.remove("code");
-    detail.remove("type");
+    // Lift only unknown values, not known fields beside them. Wrong types
+    // still fail contract parsing; missing/future types are omitted on output.
+    if detail
+        .get("code")
+        .and_then(|code| code.as_str())
+        .is_some_and(|code| decisions::ErrorCode::parse(code).is_err())
+    {
+        detail.remove("code");
+    }
+    let has_known_type = detail
+        .get("type")
+        .and_then(|kind| kind.as_str())
+        .is_some_and(|kind| decisions::ErrorType::parse(kind).is_ok());
+    if detail
+        .get("type")
+        .and_then(|kind| kind.as_str())
+        .is_some_and(|kind| decisions::ErrorType::parse(kind).is_err())
+    {
+        detail.remove("type");
+    }
     decisions::OpenAIError::from_json(&body)
         .ok()
-        .map(|error| error.error)
+        .map(|error| DecisionsRefusal {
+            detail: error.error,
+            has_known_type,
+        })
 }
 
 /// Whether a response is the contract's 403 `card_required` refusal. Only the
@@ -1154,16 +1198,22 @@ impl ConsoleClient {
     /// real network transport when none was injected. An empty error from a
     /// failing transport gets a default message.
     fn send(&self, request: HttpRequest) -> Result<HttpResponse, String> {
+        self.send_with_metadata(request)
+            .map_err(|error| error.message)
+    }
+
+    fn send_with_metadata(&self, request: HttpRequest) -> Result<HttpResponse, HttpFailure> {
         let result = match &self.transport {
-            Some(transport) => transport(&request),
+            Some(transport) => transport(&request).map_err(HttpFailure::from),
             None => real_transport(&request),
         };
-        result.map_err(|error| {
-            if error.is_empty() {
-                "could not reach Wally Cloud - check your internet connection".to_string()
-            } else {
-                error
+        result.map_err(|mut error| {
+            if error.message.is_empty() {
+                error.message =
+                    "could not reach Wally Cloud - check your internet connection".to_string();
             }
+            error.metadata.redact(&request.bearer_token);
+            error
         })
     }
 
@@ -1178,14 +1228,22 @@ impl ConsoleClient {
         no_retry: bool,
         on_retry: Option<&dyn Fn(i32, i32)>,
     ) -> (IdentityResult, DecisionsResult, String) {
-        let failed =
-            |message: String| (IdentityResult::Failed, DecisionsResult::default(), message);
+        let mut result = DecisionsResult::default();
+        let failed = |result: DecisionsResult, message: String| {
+            let message = match result.metadata.http_status {
+                Some(status) if !message.contains(&format!("HTTP {status}")) => {
+                    format!("{message} (HTTP {status})")
+                }
+                _ => message,
+            };
+            (IdentityResult::Failed, result, message)
+        };
         if !super::session_token_is_safe(access_token) {
-            return failed("no access token is available".to_string());
+            return failed(result, "no access token is available".to_string());
         }
         let origin = match console_origin(console_url) {
             Ok(origin) => origin,
-            Err(error) => return failed(error),
+            Err(error) => return failed(result, error),
         };
         let request = HttpRequest {
             method: "POST".to_string(),
@@ -1196,9 +1254,12 @@ impl ConsoleClient {
         };
         let mut retries = 0;
         let response = loop {
-            let response = match self.send(request.clone()) {
+            let response = match self.send_with_metadata(request.clone()) {
                 Ok(response) => response,
-                Err(error) => return failed(error),
+                Err(error) => {
+                    result.metadata = error.metadata;
+                    return failed(result, error.message);
+                }
             };
             if no_retry || !matches!(response.status, 429 | 503) || retries >= 2 {
                 break response;
@@ -1212,16 +1273,25 @@ impl ConsoleClient {
                 std::thread::sleep(Duration::from_secs(wait as u64));
             }
         };
+        result.metadata = ResponseMetadata::from_response(&response);
+        result.metadata.redact(access_token);
+        let refusal = decisions_refusal(&response);
+        result.refusal = refusal.clone().filter(|error| {
+            display_text_is_safe(&error.detail.message, 2048)
+                && !error.detail.message.contains(access_token)
+                && error.detail.param.as_ref().is_none_or(|param| {
+                    display_text_is_safe(param, 2048) && !param.contains(access_token)
+                })
+        });
         if response.status == 401 {
             return (
                 IdentityResult::Unauthorized,
-                DecisionsResult::default(),
+                result,
                 "console session expired".to_string(),
             );
         }
-        let refusal = decisions_refusal(&response);
         if response.status == 403
-            && refusal.as_ref().and_then(|error| error.code)
+            && refusal.as_ref().and_then(|error| error.detail.code)
                 == Some(decisions::ErrorCode::KModelNotEntitled)
         {
             // Entitlement is account-level, not session-level: the token was
@@ -1230,11 +1300,14 @@ impl ConsoleClient {
             // to log in again sends them on a trip that cannot change the
             // answer. Point at what can: the model is unavailable on THIS
             // account, and the local checkpoints don't need entitlement.
-            return failed(format!(
-                "{} is not available on this account (it is not enabled for it yet); \
+            return failed(
+                result,
+                format!(
+                    "{} is not available on this account (it is not enabled for it yet); \
                  use a local model — `wally decisions --local -m clef-flash-9b`",
-                request_body.model,
-            ));
+                    request_body.model,
+                ),
+            );
         }
         // A refused request (an input over the model's window, a model that
         // is not a decision model, a prompt format the model does not serve)
@@ -1243,37 +1316,30 @@ impl ConsoleClient {
         // try-again wording.
         if (400..500).contains(&response.status) && response.status != 429 {
             if let Some(message) = refusal
-                .map(|error| error.message)
+                .map(|error| error.detail.message)
                 .filter(|message| display_text_is_safe(message, 2048))
                 .filter(|message| !message.contains(access_token))
             {
-                return failed(format_refusal("decisions request", &message));
+                return failed(result, format_refusal("decisions request", &message));
             }
         }
         if response.status != 200 {
-            return failed(http_error(
-                "decisions request",
-                &origin,
-                &response,
-                access_token,
-            ));
+            return failed(
+                result,
+                http_error("decisions request", &origin, &response, access_token),
+            );
         }
         let object = match parse_object(&response) {
             Ok(object) => object,
-            Err(error) => return failed(error),
+            Err(error) => return failed(result, error),
         };
         let parsed = match decisions::DecisionsResponse::from_json(&object) {
             Ok(parsed) => parsed,
-            Err(_) => return failed(CONTRACT_MISMATCH.to_string()),
+            Err(_) => return failed(result, CONTRACT_MISMATCH.to_string()),
         };
-        (
-            IdentityResult::Ok,
-            DecisionsResult {
-                response: parsed,
-                raw_json: response.body,
-            },
-            String::new(),
-        )
+        result.response = parsed;
+        result.refusal = None;
+        (IdentityResult::Ok, result, String::new())
     }
 
     /// `on_retry` runs before each retry of a refused/unreachable start.

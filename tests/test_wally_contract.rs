@@ -12,6 +12,36 @@ const DECISIONS_CONTRACT_BYTES: &[u8] =
     include_bytes!("../contracts/wally-decisions-public-v1.openapi.json");
 
 #[test]
+fn decisions_cli_metadata_matches_pinned_header_schema() {
+    use wally::account::decisions_output::{
+        RequestId, ResponseMetadata, REQUEST_ID_MAX_CHARS, REQUEST_ID_MIN_CHARS,
+    };
+    let contract: serde_json::Value = serde_json::from_slice(DECISIONS_CONTRACT_BYTES).unwrap();
+    let schema = &contract["components"]["schemas"]["RequestId"];
+    assert_eq!(schema["type"], "string");
+    assert_eq!(schema["minLength"], REQUEST_ID_MIN_CHARS);
+    assert_eq!(schema["maxLength"], REQUEST_ID_MAX_CHARS);
+    assert!(
+        schema.get("pattern").is_none(),
+        "update adapter when ID constraints change"
+    );
+    let header = &contract["components"]["responses"]["Error"]["headers"]["x-request-id"];
+    assert_eq!(header["schema"]["$ref"], "#/components/schemas/RequestId");
+    assert!(RequestId::parse("").is_none());
+    assert!(RequestId::parse(&"x".repeat(257)).is_none());
+    assert!(RequestId::parse("unsafe\nheader").is_none());
+    let id = "x".repeat(256);
+    assert_eq!(RequestId::parse(&id).unwrap().as_str(), id);
+    let body = wally::account::decisions_contract::DecisionsResponse::default();
+    let mut enriched = ResponseMetadata::default().success_json(&body);
+    assert!(enriched["http_status"].is_null() && enriched["request_id"].is_null());
+    let fields = enriched.as_object_mut().unwrap();
+    fields.remove("request_id");
+    fields.remove("http_status");
+    assert_eq!(enriched, body.to_json());
+}
+
+#[test]
 fn binding_matches_the_pinned_contract() {
     // The header's pin must equal the SHA-256 of the artifact on disk. If they
     // differ, someone edited one without regenerating the other.

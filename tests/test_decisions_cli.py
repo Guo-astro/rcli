@@ -35,13 +35,25 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
     def reply(self, status, body, extra_headers=()):
         encoded = json.dumps(body, separators=(",", ":")).encode()
+        self.reply_bytes(status, encoded, extra_headers)
+
+    def reply_bytes(self, status, encoded, extra_headers=(), declared_length=None):
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(encoded)))
+        self.send_header("Content-Length", str(len(encoded) if declared_length is None else declared_length))
+        if self.path == "/v1/decisions":
+            marker = self.requests[-1][2]["input"]
+            if marker != "missing-id":
+                request_id = "x" * 257 if marker == "invalid-id" else f"decision-{marker}-{self.attempts[marker]}"
+                self.send_header("X-Request-ID", request_id)
+        else:
+            self.send_header("X-Request-ID", "not-a-decisions-request")
         for name, value in extra_headers:
             self.send_header(name, value)
         self.end_headers()
         self.wfile.write(encoded)
+        if declared_length is not None:
+            self.close_connection = True
 
     def do_GET(self):
         # Not recorded: the assertions below read the last POST, and a
@@ -81,6 +93,12 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             return
         marker = body["input"]
         self.attempts[marker] = self.attempts.get(marker, 0) + 1
+        if marker == "transport-failure":
+            self.close_connection = True
+            return
+        if marker in {"malformed", "body-read-failure"}:
+            self.reply_bytes(200, b"{", declared_length=99 if marker == "body-read-failure" else None)
+            return
         if marker in {"retry", "no-retry"} and self.attempts[marker] == 1:
             self.reply(
                 429,
@@ -144,7 +162,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
 def invoke(binary, env, *args, stdin=None):
     return subprocess.run(
-        [binary, *args], input=stdin, env=env, capture_output=True,
+        [binary, *args], input="" if stdin is None else stdin, env=env, capture_output=True,
         text=True, timeout=15, check=False,
     )
 
@@ -161,9 +179,11 @@ def main():
             origin = f"http://127.0.0.1:{server.server_port}"
             env = dict(os.environ, WALLY_PROFILE_DIR=profile, WALLY_CONSOLE_URL=origin)
 
-            signed_out = invoke(binary, env, "decisions", "--input", "x", "--ask", "Works?")
+            signed_out = invoke(binary, env, "decisions", "--input", "x", "--ask", "Works?", "--json")
             assert signed_out.returncode == 1, signed_out.stderr
             assert "Sign in first: wally account login" in signed_out.stderr
+            document = json.loads(signed_out.stdout)
+            assert document["request_id"] is None and document["http_status"] is None
 
             # Chat surfaces refuse a decision model before anything else, so
             # these hold with no coding tool installed and no session.
@@ -193,23 +213,64 @@ def main():
             assert raw.returncode == 0, raw.stderr
             document = json.loads(raw.stdout)
             assert document["object"] == "decisions" and raw.stdout.count("\n") == 1
+            assert document["http_status"] == 200, document
+            assert document["request_id"] == "decision-json-1", document
 
-            retried = invoke(binary, env, "decisions", "--input", "retry", "--ask", "Okay?")
+            for marker, status in (("too-long", 400), ("forbidden", 403), ("new-code", 400)):
+                refused = invoke(binary, env, "decisions", "--input", marker,
+                                 "--ask", "Okay?", "--json")
+                assert refused.returncode == 1, refused.stderr
+                document = json.loads(refused.stdout)
+                assert refused.stdout.count("\n") == 1
+                assert document["http_status"] == status, document
+                assert document["request_id"] == f"decision-{marker}-1", document
+                assert document["error"]["message"], document
+                if marker == "new-code":
+                    assert "type" not in document["error"] and "code" not in document["error"]
+                assert f"HTTP {status}" in refused.stderr, refused.stderr
+
+            for marker in ("missing-id", "invalid-id"):
+                result = invoke(binary, env, "decisions", "--input", marker,
+                                "--ask", "Okay?", "--json")
+                document = json.loads(result.stdout)
+                assert result.returncode == 0 and document["request_id"] is None, document
+                assert document["http_status"] == 200, document
+
+            for marker in ("malformed", "body-read-failure", "transport-failure"):
+                failed = invoke(binary, env, "decisions", "--input", marker,
+                                "--ask", "Okay?", "--json", "--no-retry")
+                assert failed.returncode == 1, failed.stderr
+                document = json.loads(failed.stdout)
+                assert failed.stdout.count("\n") == 1
+                assert document["error"]["message"], document
+                if marker == "transport-failure":
+                    assert document["request_id"] is None and document["http_status"] is None
+                else:
+                    assert document["http_status"] == 200, document
+                    assert document["request_id"] == f"decision-{marker}-1", document
+                    if marker == "body-read-failure":
+                        assert "could not reach Wally Cloud" in document["error"]["message"], document
+
+            retried = invoke(binary, env, "decisions", "--input", "retry", "--ask", "Okay?", "--json")
             assert retried.returncode == 0 and "HTTP 429; retrying" in retried.stderr
             assert ConsoleHandler.attempts["retry"] == 2
+            assert json.loads(retried.stdout)["request_id"] == "decision-retry-2"
 
             no_retry = invoke(
                 binary, env, "decisions", "--input", "no-retry", "--ask", "Okay?",
-                "--no-retry",
+                "--no-retry", "--json",
             )
             assert no_retry.returncode == 1 and "retrying" not in no_retry.stderr
             assert ConsoleHandler.attempts["no-retry"] == 1
+            assert json.loads(no_retry.stdout)["http_status"] == 429
+            assert json.loads(no_retry.stdout)["request_id"] == "decision-no-retry-1"
 
-            refreshed = invoke(binary, env, "decisions", "--input", "refresh", "--ask", "Okay?")
+            refreshed = invoke(binary, env, "decisions", "--input", "refresh", "--ask", "Okay?", "--json")
             assert refreshed.returncode == 0, refreshed.stderr
             paths = [request[0] for request in ConsoleHandler.requests]
             assert paths[-3:] == ["/v1/decisions", "/auth/cli/refresh", "/v1/decisions"]
             assert ConsoleHandler.requests[-1][1] == f"Bearer {NEW_ACCESS}"
+            assert json.loads(refreshed.stdout)["request_id"] == "decision-refresh-2"
 
             forbidden = invoke(binary, env, "decisions", "--input", "forbidden", "--ask", "Okay?")
             assert forbidden.returncode == 1
@@ -241,8 +302,10 @@ def main():
                 "model": "eve", "input": "typo", "temprature": 0.2,
                 "questions": [{"id": "q1", "type": "yes_no", "question": "Okay?"}],
             }))
-            typo = invoke(binary, env, "decisions", "--request", str(typo_file))
+            typo = invoke(binary, env, "decisions", "--request", str(typo_file), "--json")
             assert typo.returncode == 2 and "temprature" in typo.stderr, typo.stderr
+            document = json.loads(typo.stdout)
+            assert document["request_id"] is None and document["http_status"] is None
             assert len(ConsoleHandler.requests) == before, "a refused request file was sent"
 
             custom = {
