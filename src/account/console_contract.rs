@@ -10,7 +10,7 @@ use serde_json::Value;
 
 /// SHA-256 of contracts/wally-cli-v1.openapi.json this file was built from.
 pub const CONTRACT_SHA256: &str =
-    "0ee5432eb94e4a85194e059a9a343369d83476edf23b99998bd3bfbdc4dd883e";
+    "b9902ce66d30e292851a3007378cde5486b70cde98d39883b0bbfea0a886799b";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ApiErrorCode {
@@ -428,6 +428,45 @@ impl Harness {
             "llamaindex" => Ok(Harness::KLlamaindex),
             "curl" => Ok(Harness::KCurl),
             other => Err(format!("unknown Harness: {other}")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ModelReasoningLevel {
+    #[default]
+    KNone,
+    KMinimal,
+    KLow,
+    KMedium,
+    KHigh,
+    KXhigh,
+    KMax,
+}
+
+impl ModelReasoningLevel {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ModelReasoningLevel::KNone => "none",
+            ModelReasoningLevel::KMinimal => "minimal",
+            ModelReasoningLevel::KLow => "low",
+            ModelReasoningLevel::KMedium => "medium",
+            ModelReasoningLevel::KHigh => "high",
+            ModelReasoningLevel::KXhigh => "xhigh",
+            ModelReasoningLevel::KMax => "max",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Result<Self, String> {
+        match raw {
+            "none" => Ok(ModelReasoningLevel::KNone),
+            "minimal" => Ok(ModelReasoningLevel::KMinimal),
+            "low" => Ok(ModelReasoningLevel::KLow),
+            "medium" => Ok(ModelReasoningLevel::KMedium),
+            "high" => Ok(ModelReasoningLevel::KHigh),
+            "xhigh" => Ok(ModelReasoningLevel::KXhigh),
+            "max" => Ok(ModelReasoningLevel::KMax),
+            other => Err(format!("unknown ModelReasoningLevel: {other}")),
         }
     }
 }
@@ -1811,6 +1850,106 @@ impl OpenRouterPricing {
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
+pub struct ModelReasoning {
+    pub budget_enforced: bool,
+    pub default_level: Option<ModelReasoningLevel>,
+    pub levels: Vec<ModelReasoningLevel>,
+    pub thinking_ceiling_tokens: i64,
+    pub thinking_off: bool,
+}
+
+impl ModelReasoning {
+    pub fn from_json(value: &Value) -> Result<Self, String> {
+        let object = value
+            .as_object()
+            .ok_or_else(|| "expected a JSON object".to_string())?;
+        let mut result = Self::default();
+        match object.get("budget_enforced") {
+            Some(field) if !field.is_null() => {
+                result.budget_enforced = field
+                    .as_bool()
+                    .ok_or_else(|| "expected a boolean".to_string())?;
+            }
+            _ => {}
+        }
+        match object.get("default_level") {
+            Some(field) if !field.is_null() => {
+                result.default_level = Some(ModelReasoningLevel::parse(
+                    field
+                        .as_str()
+                        .ok_or_else(|| "expected a string".to_string())?,
+                )?);
+            }
+            _ => {}
+        }
+        match object.get("levels") {
+            Some(field) if !field.is_null() => {
+                result.levels = {
+                    let array = field
+                        .as_array()
+                        .ok_or_else(|| "expected an array".to_string())?;
+                    let mut items = Vec::with_capacity(array.len());
+                    for item in array {
+                        items.push(ModelReasoningLevel::parse(
+                            item.as_str()
+                                .ok_or_else(|| "expected a string".to_string())?,
+                        )?);
+                    }
+                    items
+                };
+            }
+            _ => {}
+        }
+        match object.get("thinking_ceiling_tokens") {
+            Some(field) if !field.is_null() => {
+                result.thinking_ceiling_tokens = field
+                    .as_i64()
+                    .ok_or_else(|| "expected an integer".to_string())?;
+            }
+            _ => {}
+        }
+        match object.get("thinking_off") {
+            Some(field) if !field.is_null() => {
+                result.thinking_off = field
+                    .as_bool()
+                    .ok_or_else(|| "expected a boolean".to_string())?;
+            }
+            _ => {}
+        }
+        Ok(result)
+    }
+
+    pub fn to_json(&self) -> Value {
+        let mut map = serde_json::Map::new();
+        map.insert(
+            "budget_enforced".to_string(),
+            Value::Bool(self.budget_enforced),
+        );
+        if let Some(item) = &self.default_level {
+            map.insert(
+                "default_level".to_string(),
+                Value::String(item.as_str().to_string()),
+            );
+        }
+        map.insert(
+            "levels".to_string(),
+            Value::Array(
+                self.levels
+                    .iter()
+                    .map(|item| Value::String(item.as_str().to_string()))
+                    .collect(),
+            ),
+        );
+        map.insert(
+            "thinking_ceiling_tokens".to_string(),
+            Value::from(self.thinking_ceiling_tokens),
+        );
+        map.insert("thinking_off".to_string(), Value::Bool(self.thinking_off));
+        Value::Object(map)
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct PublicModel {
     pub context_length: Option<i64>,
     pub created: Option<i64>,
@@ -1829,6 +1968,7 @@ pub struct PublicModel {
     pub owned_by: String,
     pub pricing: Option<OpenRouterPricing>,
     pub quantization: Option<String>,
+    pub reasoning: Option<ModelReasoning>,
     pub supported_features: Option<Vec<String>>,
     pub supported_sampling_parameters: Option<Vec<String>>,
 }
@@ -2030,6 +2170,12 @@ impl PublicModel {
             }
             _ => {}
         }
+        match object.get("reasoning") {
+            Some(field) if !field.is_null() => {
+                result.reasoning = Some(ModelReasoning::from_json(field)?);
+            }
+            _ => {}
+        }
         match object.get("supported_features") {
             Some(field) if !field.is_null() => {
                 result.supported_features = Some({
@@ -2134,6 +2280,9 @@ impl PublicModel {
         }
         if let Some(item) = &self.quantization {
             map.insert("quantization".to_string(), Value::String(item.clone()));
+        }
+        if let Some(item) = &self.reasoning {
+            map.insert("reasoning".to_string(), item.to_json());
         }
         if let Some(item) = &self.supported_features {
             map.insert(
