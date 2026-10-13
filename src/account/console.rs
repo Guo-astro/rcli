@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use super::console_contract as contract;
 use super::decisions_contract as decisions;
-use super::decisions_output::{DecisionsRefusal, ResponseMetadata};
+use super::decisions_output::{CloudDecisionsDocument, DecisionsRefusal, ResponseMetadata};
 use super::{
     UsageRequestRow, UsageRequestsPage, UsageRequestsQuery, UsageRequestsTotals,
     USAGE_REQUESTS_CURSOR_MAX_CHARS,
@@ -271,8 +271,19 @@ pub struct CatalogPrice {
 pub struct DecisionsResult {
     pub response: decisions::DecisionsResponse,
     pub metadata: ResponseMetadata,
+    document: Option<CloudDecisionsDocument>,
     /// Only contract-parsed, terminal-safe error details may be rendered.
     pub refusal: Option<DecisionsRefusal>,
+}
+
+impl DecisionsResult {
+    /// Enrich the validated original cloud document, or the typed local body.
+    pub fn success_json(&self) -> String {
+        match &self.document {
+            Some(document) => self.metadata.cloud_success_json(document),
+            None => crate::io::json::dump(&self.metadata.success_json(&self.response)),
+        }
+    }
 }
 
 struct HttpFailure {
@@ -1329,15 +1340,12 @@ impl ConsoleClient {
                 http_error("decisions request", &origin, &response, access_token),
             );
         }
-        let object = match parse_object(&response) {
-            Ok(object) => object,
+        let (parsed, document) = match CloudDecisionsDocument::parse(&response.body, access_token) {
+            Ok(parsed) => parsed,
             Err(error) => return failed(result, error),
         };
-        let parsed = match decisions::DecisionsResponse::from_json(&object) {
-            Ok(parsed) => parsed,
-            Err(_) => return failed(result, CONTRACT_MISMATCH.to_string()),
-        };
         result.response = parsed;
+        result.document = Some(document);
         result.refusal = None;
         (IdentityResult::Ok, result, String::new())
     }

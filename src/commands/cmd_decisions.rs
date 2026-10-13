@@ -992,49 +992,69 @@ pub(crate) fn score_loaded(
     Ok(local_response(&result, request))
 }
 
+struct LocalFailure {
+    exit_code: i32,
+    message: String,
+    /// Bootstrap/model setup already printed the detailed SDK diagnostic.
+    already_reported: bool,
+}
+
 fn run_local(options: &GlobalOptions, request: &contract::DecisionsRequest, json: bool) -> i32 {
-    if bootstrap::bootstrap(options).is_err() {
-        return 1;
-    }
-    if let Err(error) = crate::commands::model_setup::refresh_registry() {
-        out::status_line(&format!("warning: registry refresh failed: {error}"));
-    }
-
-    let model = match ensure_model_ready(options, &request.model) {
-        Ok(model) => model,
-        Err(exit_code) => return exit_code,
-    };
-
-    // Third-party code inside load/score prints to stdout (the tokenizer
-    // fallback); that corrupts --json, so stdout stays muted across both.
-    // Stderr stays live for SDK diagnostics.
-    let hush = crate::util::hush::HushedStdout::mute();
-
-    let loaded = match load_decisions_component(&model) {
-        Ok(loaded) => loaded,
-        Err(message) => {
-            drop(hush);
-            report_failure(json, &account::DecisionsResult::default(), &message);
-            return 1;
-        }
-    };
-
-    let started = Instant::now();
-    let response = match score_loaded(&loaded, request) {
-        Ok(response) => response,
-        Err(message) => {
-            // Teardown prints too: destroy the component while muted.
+    let scored: Result<_, LocalFailure> = {
+        // Scope the guard across startup, load, score and component teardown;
+        // restore stdout before rendering on every success/failure path.
+        let _hush = crate::util::hush::HushedStdout::mute();
+        (|| {
+            bootstrap::bootstrap(options).map_err(|code| LocalFailure {
+                exit_code: 1,
+                message: format!(
+                    "local decisions initialization failed: {}",
+                    out::describe_result(code)
+                ),
+                already_reported: true,
+            })?;
+            if let Err(error) = crate::commands::model_setup::refresh_registry() {
+                out::status_line(&format!("warning: registry refresh failed: {error}"));
+            }
+            let model =
+                ensure_model_ready(options, &request.model).map_err(|exit_code| LocalFailure {
+                    exit_code,
+                    message: format!(
+                        "local decision model '{}' could not be prepared; see stderr for details",
+                        request.model
+                    ),
+                    already_reported: true,
+                })?;
+            let loaded = load_decisions_component(&model).map_err(|message| LocalFailure {
+                exit_code: 1,
+                message,
+                already_reported: false,
+            })?;
+            let started = Instant::now();
+            let response = score_loaded(&loaded, request).map_err(|message| LocalFailure {
+                exit_code: 1,
+                message,
+                already_reported: false,
+            })?;
             drop(loaded);
-            drop(hush);
-            report_failure(json, &account::DecisionsResult::default(), &message);
-            return 1;
+            Ok((response, started.elapsed().as_millis()))
+        })()
+    };
+    let (response, latency_ms) = match scored {
+        Ok(scored) => scored,
+        Err(error) => {
+            let result = account::DecisionsResult::default();
+            if error.already_reported {
+                emit_failure_json(json, &result, &error.message);
+            } else {
+                report_failure(json, &result, &error.message);
+            }
+            if json {
+                crate::util::hush::mute_stdout_process();
+            }
+            return error.exit_code;
         }
     };
-    // Unload inside the muted window too: session teardown re-enters
-    // third-party code that prints, after the last line is already out.
-    drop(loaded);
-    drop(hush);
-    let latency_ms = started.elapsed().as_millis();
     if json {
         out::result_line(&crate::io::json::dump(
             &account::decisions_output::ResponseMetadata::default().success_json(&response),
@@ -1269,9 +1289,7 @@ fn run(p: &crate::cli::Parsed, options: &GlobalOptions, json: bool) -> i32 {
     };
     let latency_ms = started.elapsed().as_millis();
     if json {
-        out::result_line(&crate::io::json::dump(
-            &result.metadata.success_json(&result.response),
-        ));
+        out::result_line(&result.success_json());
     } else {
         render_human(&request, &result.response, true);
     }
@@ -1296,7 +1314,7 @@ fn run(p: &crate::cli::Parsed, options: &GlobalOptions, json: bool) -> i32 {
     0
 }
 
-fn report_failure(json: bool, result: &account::DecisionsResult, message: &str) {
+fn emit_failure_json(json: bool, result: &account::DecisionsResult, message: &str) {
     if json {
         out::result_line(&crate::io::json::dump(
             &result
@@ -1304,6 +1322,10 @@ fn report_failure(json: bool, result: &account::DecisionsResult, message: &str) 
                 .failure_json(result.refusal.as_ref(), message),
         ));
     }
+}
+
+fn report_failure(json: bool, result: &account::DecisionsResult, message: &str) {
+    emit_failure_json(json, result, message);
     // Session refresh failures are phrased by the shared session layer; add
     // the decisions status there too without using a refresh response's ID.
     match result.metadata.http_status {

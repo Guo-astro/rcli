@@ -88,6 +88,66 @@ fn decisions_success_and_refusal_keep_status_and_header() {
 }
 
 #[test]
+fn decisions_success_preserves_extensions_nulls_and_numeric_text() {
+    let reply = response(
+        200,
+        "header-id",
+        r#"{"object":"decisions","model":"eve","prompt_format_version":3,"answers":{},"usage":{"prompt_tokens":12,"total_tokens":12,"completion_tokens":0,"reasoning_tokens":null},"future":{"nullable":null,"number":1.234567890123456789e-100},"large":184467440737095516160,"request_id":"body-id","http_status":418}"#,
+    );
+    let (identity, result, _) = client(vec![Ok(reply)]).create_decisions(
+        "https://api.example.test",
+        "dummy-key",
+        &request(),
+        true,
+        None,
+    );
+    assert_eq!(identity, IdentityResult::Ok);
+    let output = result.success_json();
+    assert!(output.contains("1.234567890123456789e-100"));
+    assert!(output.contains("184467440737095516160"));
+    assert_eq!(output.matches("\"request_id\"").count(), 1);
+    assert_eq!(output.matches("\"http_status\"").count(), 1);
+    let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(parsed["request_id"], "header-id");
+    assert_eq!(parsed["http_status"], 200);
+    assert_eq!(
+        parsed["usage"].get("reasoning_tokens"),
+        Some(&serde_json::Value::Null)
+    );
+    assert_eq!(
+        parsed["future"].get("nullable"),
+        Some(&serde_json::Value::Null)
+    );
+    let typed = contract::DecisionsResponse::from_json(&parsed).unwrap();
+    assert_eq!(typed, result.response);
+}
+
+#[test]
+fn decisions_success_does_not_pass_through_echoed_credentials() {
+    for body in [
+        r#"{"object":"decisions","model":"eve","future":"dummy-key"}"#,
+        r#"{"object":"decisions","model":"eve","future":"\u0064ummy-key"}"#,
+    ] {
+        let (identity, result, message) = client(vec![Ok(response(200, "header-id", body))])
+            .create_decisions(
+                "https://api.example.test",
+                "dummy-key",
+                &request(),
+                true,
+                None,
+            );
+        assert_eq!(identity, IdentityResult::Failed);
+        assert_eq!(result.metadata.http_status, Some(200));
+        let output = result
+            .metadata
+            .failure_json(result.refusal.as_ref(), &message)
+            .to_string();
+        assert!(!output.contains("dummy-key"));
+        assert!(!output.contains("future"));
+    }
+}
+
+#[test]
 fn decisions_header_bounds_apply_to_success_and_refusal_without_truncation() {
     for status in [200, 400] {
         for id in [
@@ -177,7 +237,8 @@ fn decisions_invalid_body_keeps_headers_but_transport_failure_does_not() {
         None,
     );
     let output = result.metadata.failure_json(None, &message);
-    assert!(output["http_status"].is_null() && output["request_id"].is_null());
+    assert_eq!(output.get("http_status"), Some(&serde_json::Value::Null));
+    assert_eq!(output.get("request_id"), Some(&serde_json::Value::Null));
 }
 
 #[test]

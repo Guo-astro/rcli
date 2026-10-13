@@ -93,6 +93,13 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             return
         marker = body["input"]
         self.attempts[marker] = self.attempts.get(marker, 0) + 1
+        if marker == "passthrough":
+            self.reply_bytes(200, b'{"object":"decisions","model":"eve","prompt_format_version":3,'
+                             b'"answers":{},"usage":{"prompt_tokens":12,"total_tokens":12,'
+                             b'"completion_tokens":0,"reasoning_tokens":null},'
+                             b'"future_metadata":{"nullable":null,"precise":1.234567890123456789e-100},'
+                             b'"future_number":184467440737095516160,"request_id":"body-id","http_status":418}')
+            return
         if marker == "transport-failure":
             self.close_connection = True
             return
@@ -215,6 +222,39 @@ def main():
             assert document["object"] == "decisions" and raw.stdout.count("\n") == 1
             assert document["http_status"] == 200, document
             assert document["request_id"] == "decision-json-1", document
+
+            preserved = invoke(binary, env, "decisions", "--input", "passthrough",
+                               "--ask", "Okay?", "--json")
+            assert preserved.returncode == 0, preserved.stderr
+            document = json.loads(preserved.stdout)
+            assert document["future_metadata"]["nullable"] is None, document
+            assert document["future_number"] == 184467440737095516160, document
+            assert document["usage"]["reasoning_tokens"] is None, document
+            assert "1.234567890123456789e-100" in preserved.stdout, preserved.stdout
+            assert document["request_id"] == "decision-passthrough-1", document
+            assert document["http_status"] == 200, document
+            assert preserved.stdout.count('"request_id"') == 1
+            assert preserved.stdout.count('"http_status"') == 1
+
+            # No model or network: invalid bootstrap configuration, then a
+            # missing local artifact. Both early returns must emit null fields.
+            local_artifact = pathlib.Path(profile, "empty-local-model")
+            local_artifact.mkdir()
+            for mode, model, diagnostic in (("invalid", str(local_artifact), "invalid --environment"),
+                                            ("development", "clef-flash-9b", "not downloaded")):
+                local_env = dict(env, RUNANYWHERE_ENVIRONMENT=mode, RUNANYWHERE_API_KEY="")
+                failed = invoke(binary, local_env, "--home", profile, "decisions",
+                                "--local", "-m", model,
+                                "--input", "local", "--ask", "Okay?", "--json")
+                if mode == "development" and failed.returncode == 2 and "does not resolve" in failed.stderr:
+                    # Public Windows ARM64 kits have no GGUF decision backend.
+                    print("skip missing-model startup case: no GGUF decision catalog")
+                    continue
+                assert failed.returncode == 1, failed.stderr
+                assert diagnostic in failed.stderr, failed.stderr
+                document = json.loads(failed.stdout)
+                assert document["request_id"] is None and document["http_status"] is None
+                assert document["error"]["message"], document
 
             for marker, status in (("too-long", 400), ("forbidden", 403), ("new-code", 400)):
                 refused = invoke(binary, env, "decisions", "--input", marker,

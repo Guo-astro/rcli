@@ -1,11 +1,41 @@
 //! CLI-only metadata around the pinned decisions body. This is not the
 //! `/v1/decisions` service schema; local serving still uses that schema alone.
 
+use std::collections::BTreeMap;
+
 use serde::Serialize;
+use serde_json::value::RawValue;
 use serde_json::Value;
 
 use super::decisions_contract::{DecisionsResponse, OpenAIError, OpenAIErrorDetail};
 use super::HttpResponse;
+
+/// A service success checked by the generated binding. Business consumers use
+/// the returned typed response; this original document is only for rendering.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CloudDecisionsDocument(String);
+
+impl CloudDecisionsDocument {
+    pub(crate) fn parse(
+        body: &str,
+        access_token: &str,
+    ) -> Result<(DecisionsResponse, Self), String> {
+        let value: Value = serde_json::from_str(body)
+            .map_err(|_| "console returned malformed JSON".to_string())?;
+        if !value.is_object() {
+            return Err("console returned a JSON value instead of an object".to_string());
+        }
+        // Canonicalizing for this check also detects unicode-escaped token
+        // echoes. Do not return unsafe extension fields via raw passthrough.
+        if !access_token.is_empty() && value.to_string().contains(access_token) {
+            return Err("console returned an unsafe decisions response".to_string());
+        }
+        let response = DecisionsResponse::from_json(&value).map_err(|_| {
+            "console returned a response that did not match the contract".to_string()
+        })?;
+        Ok((response, Self(body.to_string())))
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DecisionsRefusal {
@@ -83,6 +113,27 @@ impl ResponseMetadata {
 
     pub fn success_json(&self, response: &DecisionsResponse) -> Value {
         self.attach(response.to_json())
+    }
+
+    /// Preserve extension fields, explicit nulls and numeric lexemes after
+    /// contract validation, while the response headers own CLI metadata.
+    pub fn cloud_success_json(&self, document: &CloudDecisionsDocument) -> String {
+        let mut fields: BTreeMap<String, Box<RawValue>> =
+            serde_json::from_str(&document.0).expect("validated decisions object");
+        fields.remove("request_id");
+        fields.remove("http_status");
+        #[derive(Serialize)]
+        struct Success<'a> {
+            #[serde(flatten)]
+            body: &'a BTreeMap<String, Box<RawValue>>,
+            #[serde(flatten)]
+            metadata: &'a ResponseMetadata,
+        }
+        serde_json::to_string(&Success {
+            body: &fields,
+            metadata: self,
+        })
+        .expect("validated decisions serialization")
     }
 
     pub fn failure_json(&self, refusal: Option<&DecisionsRefusal>, message: &str) -> Value {

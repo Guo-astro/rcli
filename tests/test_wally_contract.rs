@@ -34,7 +34,8 @@ fn decisions_cli_metadata_matches_pinned_header_schema() {
     assert_eq!(RequestId::parse(&id).unwrap().as_str(), id);
     let body = wally::account::decisions_contract::DecisionsResponse::default();
     let mut enriched = ResponseMetadata::default().success_json(&body);
-    assert!(enriched["http_status"].is_null() && enriched["request_id"].is_null());
+    assert_eq!(enriched.get("http_status"), Some(&serde_json::Value::Null));
+    assert_eq!(enriched.get("request_id"), Some(&serde_json::Value::Null));
     let fields = enriched.as_object_mut().unwrap();
     fields.remove("request_id");
     fields.remove("http_status");
