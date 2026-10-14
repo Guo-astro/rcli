@@ -55,6 +55,8 @@ pub mod editor_env;
 pub mod engine_options;
 pub mod model_labels;
 pub mod model_setup;
+#[cfg(windows)]
+mod update_backups;
 
 pub use cmd_about::register_about;
 pub use cmd_account::register_account;
