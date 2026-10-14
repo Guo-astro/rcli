@@ -533,7 +533,7 @@ pub fn resolve(model: &str, options: &GlobalOptions, harness_command: &str) -> O
     }
 
     if !serving && !console_url.is_empty() {
-        if let Some(gated) = super::image_gate::start(&console_url) {
+        if let Some(gated) = super::image_gate::start(&console_url, &api_key) {
             base_url = gated;
         }
     }
