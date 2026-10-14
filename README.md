@@ -78,7 +78,8 @@ wally decisions --input "Checkout is blank after Pay" \
   --choice "Owner=frontend,payments,account"
 ```
 
-Use `--json` for the raw API response, or `--request FILE` for the complete
+Use `--json` for response fields plus `request_id` and `http_status` (or an
+`error` document on failure), or `--request FILE` for the complete
 typed request shape. `--image FILE` (PNG, JPEG or WebP, up to 8, cloud only;
 on macOS a HEIC photo is sent as a full-size JPEG, upright and without its
 EXIF or GPS) asks every question about the images too; each image is billed as prompt

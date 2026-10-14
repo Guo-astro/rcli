@@ -16,7 +16,8 @@ Options:
                               about, sent at full size (repeatable, up to 8;
                               cloud only; HEIC needs macOS)
       --temperature FLOAT     Probability temperature (>0, at most 100)
-      --json                  Print the raw response JSON
+      --json                  Print result/error JSON with request ID and HTTP
+                              status
       --local                 Score on this machine with a local decision model
                               (never the network)
       --cloud                 Score on your account's hosted endpoint (never a
