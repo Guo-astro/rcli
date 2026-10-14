@@ -167,7 +167,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         })
 
 
-def invoke(binary, env, *args, stdin=None):
+def invoke(binary, env, *args, stdin=""):
+    """Run a CLI case with nonterminal input rather than an interactive route."""
     return subprocess.run(
         [binary, *args], input="" if stdin is None else stdin, env=env, capture_output=True,
         text=True, timeout=15, check=False,
