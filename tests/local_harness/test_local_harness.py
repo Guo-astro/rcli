@@ -46,6 +46,7 @@ class Console(BaseHTTPRequestHandler):
 
 
 def main():
+    """Run isolated CLI scenarios with the installed fixture's runtime intact."""
     binary, child = map(pathlib.Path, sys.argv[1:3])
     console = ThreadingHTTPServer(("127.0.0.1", 0), Console)
     threading.Thread(target=console.serve_forever, daemon=True).start()
@@ -56,6 +57,11 @@ def main():
             home, models_home, bins, profile = [root / name for name in ("home", "models home", "bin", "profile")]
             for directory in (home, models_home, bins, profile):
                 directory.mkdir()
+            if os.name == "nt":
+                # Keep the built child's app-local runtime when relocating it.
+                # PATH alone can select an incompatible System32 runtime.
+                for runtime in sorted(child.parent.glob("*.dll")):
+                    shutil.copy2(runtime, bins / runtime.name)
             for name in ("opencode", "dsh", "hermes", "openclaw", "claude"):
                 target = bins / (name + (".exe" if os.name == "nt" else ""))
                 shutil.copy2(child, target)
@@ -78,7 +84,7 @@ def main():
                     report.unlink(missing_ok=True)
                 command_env = dict(env, **(extra or {}))
                 result = subprocess.run([str(binary), "--home", str(models_home), *args],
-                                        env=command_env, text=True, capture_output=True, timeout=20)
+                                        env=command_env, input="", text=True, capture_output=True, timeout=20)
                 assert result.returncode == expected, (args, result.returncode, result.stdout, result.stderr)
                 backend = json.loads((root / "backend.json").read_text())
                 assert backend["stopped"] and backend["environment_restored"], backend
@@ -121,7 +127,7 @@ def main():
                 report.unlink(missing_ok=True)
             rejected = subprocess.run(
                 [str(binary), "--home", str(models_home), "opencode", "-m", "qwen3-0.6b"],
-                env=env, text=True, capture_output=True, timeout=20)
+                env=env, input="", text=True, capture_output=True, timeout=20)
             assert rejected.returncode == 1, rejected
             assert (
                 "This model is not certified for coding harnesses. "
