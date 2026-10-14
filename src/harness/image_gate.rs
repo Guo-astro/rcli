@@ -13,13 +13,17 @@ use std::io::Read;
 /// `http://127.0.0.1:<port>/v1` forwarding to `upstream_origin` (no `/v1`).
 /// The server lives until this process exits: the harness is a child, and
 /// dropping the handle would stop the gate before the child sent anything.
-pub fn start(upstream_origin: &str) -> Option<String> {
+/// `api_key` replaces whatever `Authorization` the harness sent: Hermes names
+/// its key variable after the base URL's host, reads none for a loopback
+/// address, and sends a placeholder bearer instead.
+pub fn start(upstream_origin: &str, api_key: &str) -> Option<String> {
     let origin = upstream_origin.trim_end_matches('/').to_string();
     if origin.is_empty() {
         return None;
     }
+    let api_key = api_key.to_string();
     let mut server = Server::new();
-    server.not_found(move |request, writer| forward(&origin, request, writer));
+    server.not_found(move |request, writer| forward(&origin, &api_key, request, writer));
     let (handle, port) = server.bind_and_run("127.0.0.1").ok()?;
     std::mem::forget(handle);
     Some(format!("http://127.0.0.1:{port}/v1"))
@@ -47,7 +51,7 @@ fn rewrite(path: &str, body: &[u8]) -> Vec<u8> {
     serde_json::to_vec(&parsed).unwrap_or_else(|_| body.to_vec())
 }
 
-fn forward(origin: &str, request: &ServerRequest, writer: &mut ResponseWriter<'_>) {
+fn forward(origin: &str, api_key: &str, request: &ServerRequest, writer: &mut ResponseWriter<'_>) {
     let query = if request.query.is_empty() {
         String::new()
     } else {
@@ -75,10 +79,14 @@ fn forward(origin: &str, request: &ServerRequest, writer: &mut ResponseWriter<'_
             || name.eq_ignore_ascii_case("content-length")
             || name.eq_ignore_ascii_case("transfer-encoding")
             || name.eq_ignore_ascii_case("connection")
+            || (!api_key.is_empty() && name.eq_ignore_ascii_case("authorization"))
         {
             continue;
         }
         builder = builder.header(name, value);
+    }
+    if !api_key.is_empty() {
+        builder = builder.header("Authorization", format!("Bearer {api_key}"));
     }
     let http_request = match builder.body(body) {
         Ok(request) => request,
