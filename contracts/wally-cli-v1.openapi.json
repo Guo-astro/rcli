@@ -1145,6 +1145,62 @@
         "minLength": 1,
         "type": "string"
       },
+      "ModelReasoning": {
+        "additionalProperties": false,
+        "description": "How this model reasons (docs/reference/gateway.md, Reasoning budget). levels: the native reasoning_effort levels, empty for a model that only switches thinking on or off; default_level: the level a request naming none runs at; thinking_off: whether reasoning_effort none turns thinking off; thinking_ceiling_tokens: the safety ceiling on thinking; budget_enforced: whether max_tokens caps the answer with thinking budgeted separately (reasoning.max_tokens a hard thinking limit).",
+        "properties": {
+          "budget_enforced": {
+            "type": "boolean"
+          },
+          "default_level": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelReasoningLevel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "levels": {
+            "items": {
+              "$ref": "#/components/schemas/ModelReasoningLevel"
+            },
+            "maxItems": 7,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "thinking_ceiling_tokens": {
+            "maximum": 2097152,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "thinking_off": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "levels",
+          "default_level",
+          "thinking_off",
+          "thinking_ceiling_tokens",
+          "budget_enforced"
+        ],
+        "type": "object"
+      },
+      "ModelReasoningLevel": {
+        "description": "A reasoning_effort name. Held equal to chat_completions_request.schema.json's ReasoningEffort by contracts/tests/test_contracts.py, so this schema stays self-contained.",
+        "enum": [
+          "none",
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "type": "string"
+      },
       "OpenAIError": {
         "additionalProperties": false,
         "properties": {
@@ -1443,6 +1499,9 @@
           "quantization": {
             "$ref": "#/components/schemas/OpenRouterQuantization",
             "description": "The served weights' precision, as OpenRouter names it. OpenRouter's legacy provider field (openrouter.ai/docs 'Provider Integration (Legacy Format)'), added by the gateway to an entry whose model is described to OpenRouter; OpenAI clients ignore it."
+          },
+          "reasoning": {
+            "$ref": "#/components/schemas/ModelReasoning"
           },
           "supported_features": {
             "description": "The request features this model honours, each measured live; an absent name is unsupported. OpenRouter's legacy provider field (openrouter.ai/docs 'Provider Integration (Legacy Format)'), added by the gateway to an entry whose model is described to OpenRouter; OpenAI clients ignore it.",
@@ -2399,8 +2458,8 @@
   },
   "x-runanywhere-source": {
     "artifact": "contracts/control-plane-v1.openapi.json",
-    "branch": "feat/decisions-images-eve",
-    "commit": "520f07802cb9abc9c64748df73481134a178e71c",
+    "branch": "fix/reasoning-budget",
+    "commit": "d4b4877a5650c591ce0ffa2a5b2450af54c3593e",
     "repository": "RunanywhereAI/InferenceInfra"
   }
 }
