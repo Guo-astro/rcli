@@ -35,7 +35,10 @@ fn rewrite(path: &str, body: &[u8]) -> Vec<u8> {
     if !parsed.is_object() {
         return body.to_vec();
     }
-    let model = parsed.get("model").and_then(|value| value.as_str()).unwrap_or("");
+    let model = parsed
+        .get("model")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
     if model.to_ascii_lowercase().contains("mimo") {
         parsed = translate::without_openai_images(parsed);
     } else {
@@ -64,7 +67,9 @@ fn forward(origin: &str, request: &ServerRequest, writer: &mut ResponseWriter<'_
         )
         .build();
     let agent = ureq::Agent::new_with_config(config);
-    let mut builder = ureq::http::Request::builder().method(request.method.as_str()).uri(&url);
+    let mut builder = ureq::http::Request::builder()
+        .method(request.method.as_str())
+        .uri(&url);
     for (name, value) in &request.headers {
         if name.eq_ignore_ascii_case("host")
             || name.eq_ignore_ascii_case("content-length")

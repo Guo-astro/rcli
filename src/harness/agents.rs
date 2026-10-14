@@ -583,8 +583,7 @@ fn lookup_limits(endpoint: &Endpoint, model: &str) -> ModelLimits {
             limits.context_window = info.context_window;
             limits.max_output = info.max_output_tokens;
             limits.image_input = info.input_modalities.iter().any(|m| m == "image");
-            limits.text_only =
-                !info.input_modalities.is_empty() && !limits.image_input;
+            limits.text_only = !info.input_modalities.is_empty() && !limits.image_input;
         }
     } else {
         out::status_line(&format!(
@@ -726,17 +725,16 @@ pub enum HermesVisionEdit {
 /// would hide the person's sessions and skills, so the edit stays inside the
 /// document they already have: one key, everything else byte for byte.
 /// `Err` when `model` is a scalar and there is no mapping to put the key in.
-pub fn set_hermes_supports_vision(
-    config: &str,
-    enabled: bool,
-) -> Result<String, HermesVisionEdit> {
+pub fn set_hermes_supports_vision(config: &str, enabled: bool) -> Result<String, HermesVisionEdit> {
     let want = if enabled { "true" } else { "false" };
     let lines = split_keep_newlines(config);
     let Some(model_at) = lines.iter().position(|line| {
-        model_line_kind(&line_body(line)) == Some(ModelLineKind::Block)
-            || model_line_kind(&line_body(line)) == Some(ModelLineKind::Inline)
+        model_line_kind(line_body(line)) == Some(ModelLineKind::Block)
+            || model_line_kind(line_body(line)) == Some(ModelLineKind::Inline)
     }) else {
-        if lines.iter().any(|line| model_line_kind(&line_body(line)) == Some(ModelLineKind::Scalar))
+        if lines
+            .iter()
+            .any(|line| model_line_kind(line_body(line)) == Some(ModelLineKind::Scalar))
         {
             return Err(HermesVisionEdit::ModelIsScalar);
         }
@@ -750,7 +748,7 @@ pub fn set_hermes_supports_vision(
         return Ok(out);
     };
 
-    match model_line_kind(&line_body(&lines[model_at])) {
+    match model_line_kind(line_body(&lines[model_at])) {
         Some(ModelLineKind::Inline) => {
             let mut out = lines;
             out[model_at] = set_inline_supports_vision(&out[model_at], want);
@@ -760,7 +758,7 @@ pub fn set_hermes_supports_vision(
             let end = lines
                 .iter()
                 .skip(model_at + 1)
-                .position(|line| is_top_level_key(&line_body(line)))
+                .position(|line| is_top_level_key(line_body(line)))
                 .map(|offset| model_at + 1 + offset)
                 .unwrap_or(lines.len());
             let mut out = lines;
@@ -783,8 +781,6 @@ pub fn set_hermes_supports_vision(
             } else {
                 let newline = if out[model_at].ends_with("\r\n") {
                     "\r\n"
-                } else if out[model_at].ends_with('\n') {
-                    "\n"
                 } else {
                     "\n"
                 };
@@ -849,7 +845,10 @@ fn is_top_level_key(body: &str) -> bool {
         return false;
     }
     let key = body.split(':').next().unwrap_or("");
-    !key.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    !key.is_empty()
+        && key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
 fn is_comment_or_blank(body: &str) -> bool {
@@ -1258,10 +1257,7 @@ pub fn prime_agent_dir() -> Option<PathBuf> {
 /// `--model runanywhere/<model>`, then their own arguments. 0.10 rejects
 /// `-e`; the provider has to already be in `models.json`.
 pub fn prime_agent_argv(model: &str, child_args: &[String]) -> Vec<String> {
-    let mut argv = vec![
-        "--model".to_string(),
-        format!("{PROVIDER_ID}/{model}"),
-    ];
+    let mut argv = vec!["--model".to_string(), format!("{PROVIDER_ID}/{model}")];
     argv.extend(child_args.iter().cloned());
     argv
 }
@@ -1515,10 +1511,8 @@ pub fn launch_agent(agent: &Agent, model: &str, args: &[String], options: &Globa
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                let _ = std::fs::set_permissions(
-                    &models_path,
-                    std::fs::Permissions::from_mode(0o600),
-                );
+                let _ =
+                    std::fs::set_permissions(&models_path, std::fs::Permissions::from_mode(0o600));
             }
             let key = ScopedEnv::new(KEY_VARIABLE, key_value);
             if !key.applied() {
@@ -2134,13 +2128,9 @@ mod tests {
         assert_eq!(claw_models[0]["input"], json!(["text", "image"]));
         assert_eq!(claw_models[1]["input"], json!(["text"]));
 
-        let built = build_prime_agent_models_config(
-            "",
-            "https://example.test/v1",
-            KEY_VARIABLE,
-            &models,
-        )
-        .unwrap();
+        let built =
+            build_prime_agent_models_config("", "https://example.test/v1", KEY_VARIABLE, &models)
+                .unwrap();
         let provider: Value = serde_json::from_str(&built).unwrap();
         let provider = &provider["providers"]["runanywhere"];
         assert_eq!(provider["models"][0]["input"], json!(["text", "image"]));
@@ -2160,9 +2150,6 @@ mod tests {
     #[test]
     fn prime_agent_argv_names_the_model_before_theirs() {
         let argv = prime_agent_argv("glm-5.3-flash", &["-c".to_string()]);
-        assert_eq!(
-            argv,
-            ["--model", "runanywhere/glm-5.3-flash", "-c"]
-        );
+        assert_eq!(argv, ["--model", "runanywhere/glm-5.3-flash", "-c"]);
     }
 }
