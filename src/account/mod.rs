@@ -7,6 +7,7 @@ pub mod console;
 pub mod console_contract;
 pub mod credentials;
 pub mod decisions_contract;
+pub mod decisions_output;
 pub mod model_cache;
 pub mod session;
 pub mod usage_requests;

@@ -145,22 +145,15 @@ Invoke-Expression (Invoke-RestMethod -UseBasicParsing $env:WALLY_UPDATE_RESOLVED
     }
 }
 
-/// Deletes the `<name>.old` files an update left beside wally.exe because
-/// they were still in use. Best effort: one still in use stays for next time.
+/// Deletes only backups recorded by a successfully completed Windows update.
+/// Legacy `.old` files have no ownership evidence and are left untouched.
 #[cfg(windows)]
 pub fn sweep_replaced_files() {
     let Ok(exe) = std::env::current_exe() else {
         return;
     };
     let Some(dir) = exe.parent() else { return };
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        if entry.file_name().to_string_lossy().ends_with(".old") {
-            let _ = std::fs::remove_file(entry.path());
-        }
-    }
+    super::update_backups::sweep(dir);
 }
 
 #[cfg(not(windows))]

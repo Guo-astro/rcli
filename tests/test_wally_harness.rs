@@ -783,6 +783,47 @@ fn hermes_argv_pins_provider_and_model_ahead_of_the_rest() {
     );
 }
 
+// Hermes reads image support only from model.supports_vision. The edit adds
+// that one key and leaves every other line alone.
+#[test]
+fn hermes_vision_flag_lands_on_the_model_mapping() {
+    let written = harness::set_hermes_supports_vision(
+        "model:\n  provider: custom\n  default: glm-5.3-flash\n",
+        true,
+    )
+    .expect("a model mapping can take the flag");
+    assert_eq!(
+        written,
+        "model:\n  supports_vision: true\n  provider: custom\n  default: glm-5.3-flash\n"
+    );
+
+    let again = harness::set_hermes_supports_vision(&written, true).expect("already set");
+    assert_eq!(again, written, "a second launch must not rewrite the file");
+
+    let off = harness::set_hermes_supports_vision(&written, false).expect("text-only model");
+    assert!(
+        off.contains("supports_vision: false"),
+        "a text-only model must clear the flag: {off}"
+    );
+    assert!(
+        off.contains("provider: custom") && off.contains("default: glm-5.3-flash"),
+        "the rest of the model block must stay: {off}"
+    );
+}
+
+#[test]
+fn hermes_vision_flag_does_not_rewrite_a_scalar_model() {
+    let original = "model: glm-5.3-flash\n";
+    let err = harness::set_hermes_supports_vision(original, true);
+    assert_eq!(err, Err(harness::HermesVisionEdit::ModelIsScalar));
+}
+
+#[test]
+fn hermes_vision_flag_starts_a_missing_config() {
+    let written = harness::set_hermes_supports_vision("", true).expect("empty config");
+    assert_eq!(written, "model:\n  supports_vision: true\n");
+}
+
 // A memory budget never overrides a model's own supported window.
 #[test]
 fn local_context_size_respects_floor_and_model_window() {

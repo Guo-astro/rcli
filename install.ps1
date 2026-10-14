@@ -46,38 +46,105 @@ function Fail([string]$Message) {
 # Replaces an existing install file by file. Windows will not move a folder
 # whose wally.exe or DLLs are in use (`wally update` runs this installer while
 # wally itself is running, and another terminal may be running wally too), but
-# it will rename each of those files. So every current file is renamed to
-# <name>.old, the new files are moved in beside them, and any failure renames
-# them all back. A .old file still in use cannot be deleted yet; the next
-# update, or the next wally run, removes it.
+# it will rename each of those files. Replace only names present in the verified
+# release, preserving other files and legacy .old backups. A unique backup name
+# avoids collisions with user backups. Only a committed receipt authorizes a
+# later startup to delete backups; failed/interrupted updates keep recovery files.
+<#
+.SYNOPSIS
+Replaces only files supplied by a verified release in an existing Windows install.
+.DESCRIPTION
+Serializes the transaction, preserves unrelated files, and publishes a receipt
+only after every replacement succeeds. A later startup may clean up only the
+backups named and hashed in that receipt. Failed or interrupted updates leave
+their recovery files available for manual inspection.
+.PARAMETER Source
+Directory containing the flat, verified release files.
+.PARAMETER Target
+Existing installation directory to update.
+#>
 function Update-InPlace([string]$Source, [string]$Target) {
-    Get-ChildItem -LiteralPath $Target -Filter '*.old' -Force |
-        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    # Serialize replacements so another installer cannot invalidate rollback.
+    $Lock = [IO.File]::Open((Join-Path $Target '.wally-update.lock'),
+        [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+    $Id = [Guid]::NewGuid().ToString('N')
+    $Pending = Join-Path $Target ".wally-update-$Id.pending"
+    $Receipt = Join-Path $Target ".wally-update-$Id.json"
     $Retired = @()
     $Placed = @()
     try {
-        foreach ($Item in @(Get-ChildItem -LiteralPath $Target -Force)) {
-            $Aside = "$($Item.FullName).old"
-            if (Test-Path -LiteralPath $Aside) { $Aside = "$($Item.FullName).$PID.old" }
-            Rename-Item -LiteralPath $Item.FullName -NewName (Split-Path $Aside -Leaf) -ErrorAction Stop
-            $Retired += [pscustomobject]@{ Original = $Item.FullName; Aside = $Aside }
+        try {
+            # Uncommitted recovery files have no cleanup authorization. Surface
+            # them on the next update, but leave manual recovery to the user.
+            foreach ($Recovery in @(Get-ChildItem -LiteralPath $Target -Force -File)) {
+                if ($Recovery.Name -match '^\.wally-update-([0-9a-f]{32})\.pending$' -or
+                    $Recovery.Name -match '^.+\.wally-backup-([0-9a-f]{32})$') {
+                    $RecoveryReceipt = Join-Path $Target ".wally-update-$($Matches[1]).json"
+                    if (-not (Test-Path -LiteralPath $RecoveryReceipt)) {
+                        Write-Warning "A previous update may have been interrupted; recovery files remain in $Target. Review them before removing anything."
+                        break
+                    }
+                }
+            }
+            $Items = @(Get-ChildItem -LiteralPath $Source -Force)
+            # Windows release bin/ is flat. Refuse directories and links rather
+            # than recursively retiring unknown contents under a matching name.
+            foreach ($Item in $Items) {
+                if ($Item.PSIsContainer -or ($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+                    $Item.Name.StartsWith('.wally-', [StringComparison]::OrdinalIgnoreCase)) {
+                    throw "Unsupported release entry: $($Item.Name)"
+                }
+                $Destination = Join-Path $Target $Item.Name
+                if (Test-Path -LiteralPath $Destination) {
+                    $Existing = Get-Item -LiteralPath $Destination -Force
+                    if ($Existing.PSIsContainer -or ($Existing.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+                        throw "Cannot replace a directory or link: $($Item.Name)"
+                    }
+                    if (Test-Path -LiteralPath "$Destination.wally-backup-$Id") { throw "Backup already exists: $Destination.wally-backup-$Id" }
+                }
+            }
+            foreach ($Item in $Items) {
+                $Destination = Join-Path $Target $Item.Name
+                if (Test-Path -LiteralPath $Destination) {
+                    $Aside = "$Destination.wally-backup-$Id"
+                    if (Test-Path -LiteralPath $Aside) { throw "Backup already exists: $Aside" }
+                    $Hash = (Get-FileHash -LiteralPath $Destination -Algorithm SHA256).Hash.ToLowerInvariant()
+                    Rename-Item -LiteralPath $Destination -NewName (Split-Path $Aside -Leaf) -ErrorAction Stop
+                    $Retired += [pscustomobject]@{ Original = $Destination; Aside = $Aside; Hash = $Hash }
+                }
+                Move-Item -LiteralPath $Item.FullName -Destination $Destination -ErrorAction Stop
+                $Placed += $Destination
+            }
+            $Backups = @($Retired | ForEach-Object {
+                @{ name = (Split-Path $_.Aside -Leaf); sha256 = $_.Hash }
+            })
+            $Json = @{ version = 1; backups = $Backups } | ConvertTo-Json -Depth 3 -Compress
+            $Bytes = [Text.UTF8Encoding]::new($false).GetBytes($Json)
+            $Stream = [IO.File]::Open($Pending, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+            try { $Stream.Write($Bytes, 0, $Bytes.Length); $Stream.Flush($true) } finally { $Stream.Dispose() }
+            # Publication is the commit point: startup never sees a receipt for
+            # files which might still need to be restored by this transaction.
+            Rename-Item -LiteralPath $Pending -NewName (Split-Path $Receipt -Leaf) -ErrorAction Stop
+        } catch {
+            $Reason = $_.Exception.Message
+            $RestoreFailed = $false
+            foreach ($Path in $Placed) {
+                try { Remove-Item -LiteralPath $Path -Force -ErrorAction Stop } catch { $RestoreFailed = $true }
+            }
+            foreach ($Entry in $Retired) {
+                try {
+                    Rename-Item -LiteralPath $Entry.Aside -NewName (Split-Path $Entry.Original -Leaf) -ErrorAction Stop
+                } catch { $RestoreFailed = $true }
+            }
+            Remove-Item -LiteralPath $Pending -Force -ErrorAction SilentlyContinue
+            if ($RestoreFailed) { Fail "Could not replace the installed files ($Reason); some files could not be restored. Recovery backups remain in $Target." }
+            Fail "Could not replace the installed files ($Reason); the existing installation was restored."
         }
-        foreach ($Item in @(Get-ChildItem -LiteralPath $Source -Force)) {
-            $Destination = Join-Path $Target $Item.Name
-            Move-Item -LiteralPath $Item.FullName -Destination $Destination -ErrorAction Stop
-            $Placed += $Destination
-        }
-    } catch {
-        $Reason = $_.Exception.Message
-        foreach ($Path in $Placed) { Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue }
+        # Locked backups and their receipt survive until a later wally startup.
         foreach ($Entry in $Retired) {
-            Rename-Item -LiteralPath $Entry.Aside -NewName (Split-Path $Entry.Original -Leaf) -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $Entry.Aside -Force -ErrorAction SilentlyContinue
         }
-        Fail "Could not replace the installed files ($Reason); the existing installation was left unchanged."
-    }
-    foreach ($Entry in $Retired) {
-        Remove-Item -LiteralPath $Entry.Aside -Recurse -Force -ErrorAction SilentlyContinue
-    }
+    } finally { $Lock.Dispose() }
 }
 
 # Check mode: print the latest release version and nothing else, then stop
