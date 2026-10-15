@@ -862,7 +862,9 @@ fn estimate_content_chars(content: &Value) -> usize {
 }
 
 /// A rough (~4 chars/token) estimate of the request's input tokens, used
-/// before the real usage is known (e.g. for `message_start`'s usage block).
+/// before the real usage is known (`message_start`'s usage block) and as the
+/// `count_tokens` answer. Tool definitions count: in a coding session their
+/// schemas are often most of the prompt, and the model reads them too.
 pub fn estimate_request_tokens(anthropic: &Value) -> i32 {
     let mut chars = anthropic
         .get("system")
@@ -876,6 +878,12 @@ pub fn estimate_request_tokens(anthropic: &Value) -> i32 {
             let content = message.get("content").cloned().unwrap_or(Value::Null);
             chars += estimate_content_chars(&content);
         }
+    }
+    if let Some(tools) = anthropic.get("tools").and_then(Value::as_array) {
+        chars += tools
+            .iter()
+            .map(|tool| crate::io::json::dump(tool).len())
+            .sum::<usize>();
     }
     estimate_tokens_from_chars(chars)
 }
@@ -1468,6 +1476,18 @@ pub fn upstream_failure(status: i32, body: &str) -> UpstreamFailureBody {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tool_definitions_reach_the_estimate() {
+        let bare = json!({"messages": [{"role": "user", "content": "hi"}]});
+        let mut with_tool = bare.clone();
+        with_tool["tools"] = json!([{
+            "name": "edit",
+            "description": "Replace a string in a file with another string, exactly once.",
+            "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}},
+        }]);
+        assert!(estimate_request_tokens(&with_tool) > estimate_request_tokens(&bare) + 20);
+    }
 
     #[test]
     fn estimate_request_tokens_empty() {
