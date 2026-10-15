@@ -423,3 +423,66 @@ fn config_declares_image_input_only_where_the_catalog_lists_it() {
         "a text-only model declares no image input: {text:?}"
     );
 }
+
+fn strings(items: &[&str]) -> Vec<String> {
+    items.iter().map(|item| item.to_string()).collect()
+}
+
+#[test]
+fn opencode_version_output_is_read_for_its_major_version() {
+    assert_eq!(
+        harness::open_code_major_version("opencode v2.0.28\n"),
+        Some(2)
+    );
+    assert_eq!(harness::open_code_major_version("1.18.34\n"), Some(1));
+    assert_eq!(harness::open_code_major_version("v3.1.0"), Some(3));
+    assert_eq!(harness::open_code_major_version(""), None);
+    assert_eq!(harness::open_code_major_version("opencode"), None);
+}
+
+// OpenCode 2 answers every launch from a background service that never saw
+// the launch's OPENCODE_CONFIG_CONTENT (2.0.28 ran "build · cat-jam-free"
+// instead of the runanywhere model), so a launch asks for a private server.
+#[test]
+fn opencode_two_launches_get_a_private_server() {
+    let v2 = Some(2);
+    assert_eq!(
+        harness::with_private_server(&strings(&["run", "Reply OK"]), v2),
+        strings(&["run", "--standalone", "Reply OK"])
+    );
+    assert_eq!(
+        harness::with_private_server(&[], v2),
+        strings(&["--standalone"])
+    );
+    assert_eq!(
+        harness::with_private_server(&strings(&["--continue"]), v2),
+        strings(&["--standalone", "--continue"])
+    );
+    assert_eq!(
+        harness::with_private_server(&strings(&["some/project"]), v2),
+        strings(&["--standalone", "some/project"])
+    );
+    assert_eq!(
+        harness::with_private_server(&strings(&["mini"]), Some(3)),
+        strings(&["mini", "--standalone"])
+    );
+}
+
+#[test]
+fn opencode_launches_that_need_no_private_server_are_untouched() {
+    let run = strings(&["run", "Reply OK"]);
+    // OpenCode 1 has no service and no such flag; an unknown version is not
+    // given a flag it may not take.
+    assert_eq!(harness::with_private_server(&run, Some(1)), run);
+    assert_eq!(harness::with_private_server(&run, None), run);
+    // A command that opens no session, and a server the person chose.
+    for args in [
+        strings(&["auth", "login"]),
+        strings(&["service", "stop"]),
+        strings(&["run", "--standalone", "Reply OK"]),
+        strings(&["run", "--server", "http://127.0.0.1:4096", "Reply OK"]),
+        strings(&["--server=http://127.0.0.1:4096"]),
+    ] {
+        assert_eq!(harness::with_private_server(&args, Some(2)), args);
+    }
+}
