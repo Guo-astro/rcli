@@ -671,8 +671,8 @@ pub fn hermes_key_variable(base_url: &str) -> String {
         .next()
         .map(|c| c.is_ascii_alphabetic())
         .unwrap_or(false);
-    if !starts_with_letter || vendor == "OPENAI" || vendor == "OPENROUTER" || vendor == "OLLAMA" {
-        // Those three are host-gated on their own vendors' domains; borrowing
+    if !starts_with_letter || vendor == "OPENAI" || vendor == "OPENROUTER" {
+        // Those two are host-gated on their own vendors' domains; borrowing
         // the name would hand our token to a check that is not about us.
         return String::new();
     }

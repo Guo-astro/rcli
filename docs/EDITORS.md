@@ -21,7 +21,7 @@ tool starts the way you already have it configured, and wally wires nothing.
 | Tool | How it is wired |
 | --- | --- |
 | `claude-code` | `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN` in the process |
-| `codex` | `-c` overrides on its command line naming a `wally` provider at the translator, plus a model catalog file for the run; the loopback token is in `WALLY_CODEX_API_KEY`, and `~/.codex` is never written |
+| `codex` | `-c` overrides on its command line naming a `wally` provider at the translator, plus a model catalog file for the run; the loopback token is in `WALLY_CODEX_API_KEY`. It runs in a Codex home of wally's own, seeded from yours (settings, `AGENTS.md`, skills, rules, agents), so its threads never appear in your own Codex and `~/.codex` is never written |
 | `opencode` | a temporary provider in `OPENCODE_CONFIG_CONTENT`, with the local or hosted endpoint and context limits |
 | `claude-desktop` | a gateway profile in Claude Desktop's third party mode, covering the chat and Cowork tabs |
 | `hermes` | `CUSTOM_BASE_URL`, `HERMES_INFERENCE_PROVIDER=custom`, the model in `HERMES_INFERENCE_MODEL`, and the key under the name its host gates on |
