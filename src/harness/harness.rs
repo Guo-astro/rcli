@@ -1319,7 +1319,17 @@ pub fn launch(tool: &str, model: &str, args: &[String], options: &GlobalOptions)
     let previous = std::env::var(CONFIG_VARIABLE).ok();
     set_config_variable(&config);
 
-    let status = spawn(tool, args);
+    // OpenCode 2's background service never sees this process's
+    // configuration; see opencode::with_private_server.
+    let args = if tool == "opencode" {
+        super::opencode::with_private_server(
+            args,
+            super::opencode::installed_open_code_major_version(),
+        )
+    } else {
+        args.to_vec()
+    };
+    let status = spawn(tool, &args);
 
     // Launch runs more than once in a process during tests, and a stale
     // value here would override the tool's own configuration on a later

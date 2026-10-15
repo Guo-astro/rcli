@@ -119,6 +119,21 @@ fn run() -> Result<i32, String> {
         .and_then(|stem| stem.to_str())
         .unwrap_or_default()
         .to_string();
+    // A version probe, as the real tool answers it: a version line and no
+    // session. Wally asks OpenCode for its version before a launch (OpenCode 2
+    // needs --standalone); WALLY_TEST_OPENCODE_VERSION picks the answer.
+    if args.len() == 2 && args[1] == "--version" {
+        let version = env_str("WALLY_TEST_OPENCODE_VERSION");
+        println!(
+            "{}",
+            if version.is_empty() {
+                "1.18.34"
+            } else {
+                version.as_str()
+            }
+        );
+        return Ok(0);
+    }
     let mut url = String::new();
     let mut model = String::new();
     let mut report = json!({"tool": tool, "args": args[1..], "temporary_files": []});
