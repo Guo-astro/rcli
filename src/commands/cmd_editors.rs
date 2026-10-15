@@ -644,10 +644,26 @@ fn run(
         // thread and takes `applied` before restoring, so a signal mid-apply
         // waits for those writes to finish rather than racing them, and it only
         // restores once `applied` is set — there is nothing to undo before then.
+        //
+        // The run and the app it opened end together. `instance` is the pid of
+        // the Claude Desktop this run started (0 until it is found): Ctrl-C
+        // quits that instance before restoring, and the instance exiting ends
+        // the run even when `open -W` does not notice.
         let applied = std::sync::Arc::new(std::sync::Mutex::new(false));
         let applied_for_signal = std::sync::Arc::clone(&applied);
+        #[cfg(target_os = "macos")]
+        let instance = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
+        #[cfg(target_os = "macos")]
+        let instance_for_signal = std::sync::Arc::clone(&instance);
         let editor_id = editor.id;
         let _restore_on_signal = crate::util::interrupt::on_interrupt(move || {
+            #[cfg(target_os = "macos")]
+            {
+                let pid = instance_for_signal.load(std::sync::atomic::Ordering::SeqCst);
+                if pid > 0 && !desktop::instance::quit(pid, std::time::Duration::from_secs(5)) {
+                    out::error_line(&format!("{editor_id} did not quit; close it by hand"));
+                }
+            }
             let done = applied_for_signal
                 .lock()
                 .unwrap_or_else(|poison| poison.into_inner());
@@ -689,6 +705,43 @@ fn run(
             }
             *done = true;
         }
+        // Set once `launch` returns, so the watcher below leaves the normal
+        // ending to this thread when `open -W` did notice the app quit.
+        let finished = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        #[cfg(target_os = "macos")]
+        {
+            let before = desktop::instance::main_pids(&bundle);
+            let bundle = bundle.clone();
+            let instance = std::sync::Arc::clone(&instance);
+            let finished = std::sync::Arc::clone(&finished);
+            let applied = std::sync::Arc::clone(&applied);
+            std::thread::spawn(move || {
+                let Some(pid) = desktop::instance::wait_for_new(
+                    &bundle,
+                    &before,
+                    std::time::Duration::from_secs(60),
+                ) else {
+                    return;
+                };
+                instance.store(pid, std::sync::atomic::Ordering::SeqCst);
+                desktop::instance::wait_for_exit(pid);
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                if finished.load(std::sync::atomic::Ordering::SeqCst) {
+                    return;
+                }
+                let _done = applied.lock().unwrap_or_else(|poison| poison.into_inner());
+                if let Err(failure) = desktop::restore_gateway() {
+                    out::error_line(&failure);
+                    out::error_line(&format!(
+                        "could not put {editor_id} back on Anthropic; run `wally {editor_id} --restore`"
+                    ));
+                }
+                out::status_line(&format!("{editor_id} quit; wally is done"));
+                // SAFETY: _exit has no preconditions and does not return; it
+                // skips destructors the same way the interrupt path does.
+                unsafe { libc::_exit(0) };
+            });
+        }
         // A new instance reads the gateway profile at startup. The one already
         // running keeps the profile it started with, and keeps whatever the
         // reader has open in it, which is the trade we want.
@@ -698,6 +751,8 @@ fn run(
             &editor_env::open_args(&bundle, &shim, args, model),
             options,
         );
+        finished.store(true, std::sync::atomic::Ordering::SeqCst);
+        let _done = applied.lock().unwrap_or_else(|poison| poison.into_inner());
         if let Err(failure) = desktop::restore_gateway() {
             out::error_line(&failure);
         }
