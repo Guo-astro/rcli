@@ -12,6 +12,8 @@ Options:
       --serve                 Print the endpoint and keep it open instead of
                               launching
       --restore               Put Claude Desktop back on Anthropic and exit
+      --context-window INT    Tell the tool the model holds this many tokens, so
+                              it compacts sooner
 
 Examples:
   # The certified local coding model

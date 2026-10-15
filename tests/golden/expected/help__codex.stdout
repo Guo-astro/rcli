@@ -1,0 +1,25 @@
+Open Codex with a model
+
+Usage: wally codex [OPTIONS] [args...]
+
+Arguments:
+  args                        Passed through to codex
+
+Options:
+  -h, --help                  Show help
+  -m, --model TEXT            A model on this machine, or a hosted one from your
+                              account
+      --context-window INT    Tell Codex the model holds this many tokens, so it
+                              compacts sooner
+      --serve                 Print the endpoint and keep it open instead of
+                              launching
+
+Examples:
+  # The certified local coding model
+  wally codex -m qwen3-4b-instruct-2507
+
+  # A hosted model (needs `wally account login`)
+  wally codex -m glm-5.3-flash
+
+  # Pass arguments through to Codex after --
+  wally codex -m glm-5.3-flash -- exec "explain this project"

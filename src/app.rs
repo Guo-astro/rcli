@@ -73,6 +73,7 @@ pub fn configure_app(app: &mut App) {
     crate::commands::register_decisions(app);
 
     crate::commands::register_editors(app);
+    crate::commands::register_codex(app);
     crate::commands::register_harness(app); // coding agents
     crate::commands::register_default_models(app);
 
@@ -125,6 +126,7 @@ pub fn configure_app(app: &mut App) {
                 "opencode",
                 "claude-code",
                 "claude-desktop",
+                "codex",
                 "hermes",
                 "openclaw",
                 "deepseek",
@@ -166,6 +168,7 @@ fn is_passthrough_command(token: &str) -> bool {
     const NAMES: &[&str] = &[
         "claude-code",
         "claude-desktop",
+        "codex",
         "opencode",
         "hermes",
         "openclaw",
@@ -205,10 +208,11 @@ fn root_flags_before_passthrough(argv: &[String]) -> Vec<&str> {
         .collect()
 }
 
-/// wally's own flags on those subcommands. `-m`/`--model` take a following
-/// value; the rest are booleans. The `=` forms carry their value inline.
+/// wally's own flags on those subcommands. `-m`/`--model` and
+/// `--context-window` take a following value; the rest are booleans. The `=`
+/// forms carry their value inline.
 fn consumes_following_value(token: &str) -> bool {
-    token == "-m" || token == "--model"
+    token == "-m" || token == "--model" || token == "--context-window"
 }
 
 fn is_wally_flag(token: &str) -> bool {
@@ -216,6 +220,8 @@ fn is_wally_flag(token: &str) -> bool {
         || token == "--model"
         || token.starts_with("--model=")
         || token.starts_with("-m=")
+        || token == "--context-window"
+        || token.starts_with("--context-window=")
         || token == "--serve"
         || token == "--restore"
         || token == "--cloud"

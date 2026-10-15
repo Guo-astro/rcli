@@ -1,6 +1,6 @@
 # Golden CLI corpus
 
-Byte-exact stdout, stderr and exit code for 365 invocations of `wally`,
+Byte-exact stdout, stderr and exit code for 369 invocations of `wally`,
 captured from the C++ build of `origin/main` at `d1e9c0b` (the last C++
 release line) on macOS arm64 with kit 0.20.37. `tests/cli_golden.rs` replays
 every case against the Rust binary in the same isolated environment and fails
@@ -89,3 +89,13 @@ Fourteen `models list` cases were re-captured from the Rust binary when
 models, and `--local` took over the old meaning of `--all`. The differences are
 the `--all`/`--local`/`--cloud` help lines, the empty-list hint (now `--local`), the "cloud models not shown"
 line on a signed-out `--all`, and a `cloud` field on each `--json` row.
+
+`wally codex` added a line to every command list, so the 31 cases that print
+one were re-captured from the Rust binary, the same set `wally prime-agent`
+touched. That line is the only difference in each. `help__codex` and
+`help__help__codex` are new cases, mirroring Prime Agent's.
+
+`--context-window` was added to `wally claude-code`, `wally claude-desktop`
+and `wally codex`, so their help cases (`help__*`, `help__help__*`,
+`alt_help__help__claude-code`) were re-captured from the Rust binary; the
+option's two lines are the only difference.

@@ -11,6 +11,8 @@ Options:
                               account
       --serve                 Print the endpoint and keep it open instead of
                               launching
+      --context-window INT    Tell the tool the model holds this many tokens, so
+                              it compacts sooner
 
 Examples:
   # The certified local coding model

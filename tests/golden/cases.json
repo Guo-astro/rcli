@@ -293,6 +293,13 @@
   ]
  },
  {
+  "name": "help__codex",
+  "args": [
+   "help",
+   "codex"
+  ]
+ },
+ {
   "name": "help__deepseek",
   "args": [
    "help",
@@ -450,6 +457,14 @@
   "args": [
    "help",
    "prime-agent",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__help__codex",
+  "args": [
+   "help",
+   "codex",
    "--help"
   ]
  },

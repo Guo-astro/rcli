@@ -14,6 +14,7 @@ pub mod bootstrap;
 pub mod catalog;
 pub mod cli;
 pub mod cli_formatter;
+pub mod codex;
 pub mod commands;
 pub mod config;
 pub mod desktop;

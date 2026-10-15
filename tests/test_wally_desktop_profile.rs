@@ -88,3 +88,48 @@ fn space_and_tab_only_profile_file_is_still_treated_as_blank() {
         result.err()
     );
 }
+
+// ---------------------------------------------------------------------------
+// A model that holds a 1M-token window is offered (and preferred) at 1M, so the
+// app compacts it at its real window rather than the 200K of the Claude model
+// the entry is named after.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn million_token_models_are_offered_at_1m_and_the_rest_are_not() {
+    let _lock = env_lock();
+    let home = TempHome::new();
+    let mut guard = EnvGuard::new();
+    guard.set("HOME", home.path());
+
+    let models = vec![
+        ("claude-sonnet-4-5".to_string(), "glm-5.3-flash".to_string()),
+        ("claude-opus-5".to_string(), "small-model".to_string()),
+    ];
+    wally::desktop::apply_gateway(
+        "http://127.0.0.1:1",
+        "token",
+        &models,
+        &["claude-sonnet-4-5".to_string()],
+        "RunAnywhere",
+    )
+    .expect("profile written");
+
+    let dir = home.join("Library/Application Support/Claude-3p/configLibrary");
+    let profile = std::fs::read_dir(&dir)
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .find(|p| p.file_name().unwrap() != "_meta.json")
+        .expect("profile file");
+    let doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(profile).unwrap()).unwrap();
+    let entries = doc["inferenceModels"].as_array().unwrap();
+    assert_eq!(entries[0]["supports1m"], true);
+    assert_eq!(entries[0]["prefer1m"], true);
+    assert_eq!(entries[0]["labelOverride"], "glm-5.3-flash");
+    assert!(entries[1].get("supports1m").is_none());
+    assert!(entries[1].get("prefer1m").is_none());
+
+    wally::desktop::restore_gateway().expect("restored");
+}

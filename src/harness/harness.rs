@@ -753,6 +753,7 @@ fn installer(tool: &str) -> Option<Installer> {
         "opencode" => ("npm i -g opencode-ai", "npm.cmd i -g opencode-ai", true),
         "openclaw" => ("npm i -g openclaw@latest", "npm.cmd i -g openclaw@latest", true),
         "dsh" => ("npm i -g @deepseek-ai/dsh", "npm.cmd i -g @deepseek-ai/dsh", true),
+        "codex" => ("npm i -g @openai/codex", "npm.cmd i -g @openai/codex", true),
         "claude" => (
             "curl -fsSL https://claude.ai/install.sh | bash",
             "irm https://claude.ai/install.ps1 | iex",
