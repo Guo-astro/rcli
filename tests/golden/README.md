@@ -1,6 +1,6 @@
 # Golden CLI corpus
 
-Byte-exact stdout, stderr and exit code for 369 invocations of `wally`,
+Byte-exact stdout, stderr and exit code for 371 invocations of `wally`,
 captured from the C++ build of `origin/main` at `d1e9c0b` (the last C++
 release line) on macOS arm64 with kit 0.20.37. `tests/cli_golden.rs` replays
 every case against the Rust binary in the same isolated environment and fails
@@ -99,3 +99,7 @@ touched. That line is the only difference in each. `help__codex` and
 and `wally codex`, so their help cases (`help__*`, `help__help__*`,
 `alt_help__help__claude-code`) were re-captured from the Rust binary; the
 option's two lines are the only difference.
+
+`wally chatgpt` added a line to every command list, so the same 31 cases were
+re-captured from the Rust binary; that line is the only difference in each.
+`help__chatgpt` and `help__help__chatgpt` are new cases.

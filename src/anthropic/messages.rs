@@ -112,8 +112,30 @@ fn effective_model(runtime: &Runtime, request: &Value) -> String {
                 return id.clone();
             }
         }
+        // Claude Desktop can resolve a tier to a Claude model of its own
+        // choosing (`claude-opus-5-5` for "opus") instead of the entry listed
+        // for that tier. It is still asking for that tier's model, so the
+        // request goes to the model listed under the same family rather than
+        // to the launched default.
+        if let Some(id) = family_alias(&runtime.aliases, requested) {
+            return id;
+        }
     }
     runtime.model.clone()
+}
+
+/// The model listed for the Claude tier `requested` names (`sonnet`, `opus`,
+/// `haiku`), when it is a `claude-` id: the alias in that tier's picker slot
+/// (`desktop::DESKTOP_TIERS`), whatever name the slot is listed under.
+fn family_alias(aliases: &ModelAliases, requested: &str) -> Option<String> {
+    let requested = requested.to_ascii_lowercase();
+    if !requested.starts_with("claude-") {
+        return None;
+    }
+    let slot = crate::desktop::DESKTOP_TIERS
+        .iter()
+        .position(|tier| requested.contains(tier))?;
+    aliases.get(slot).map(|(_, id)| id.clone())
 }
 
 /// `requested` without a trailing `[1m]`, in any casing.
@@ -609,6 +631,42 @@ fn handle_messages_route(
     }
 }
 
+fn handle_count_tokens_route(
+    runtime: &Runtime,
+    request: &ServerRequest,
+    writer: &mut ResponseWriter<'_>,
+) {
+    let (status, payload) = if !presents_token(request, &runtime.local_token) {
+        (
+            401,
+            translate::error_body(
+                "authentication_error",
+                "this local endpoint only serves the tool wally launched",
+            ),
+        )
+    } else {
+        match serde_json::from_slice::<Value>(&request.body) {
+            Ok(parsed) if parsed.is_object() => (
+                200,
+                json!({"input_tokens": translate::estimate_request_tokens(&parsed)}).to_string(),
+            ),
+            Ok(_) => (
+                400,
+                translate::error_body("invalid_request_error", "the body must be a JSON object"),
+            ),
+            Err(error) => (
+                400,
+                translate::error_body("invalid_request_error", &error.to_string()),
+            ),
+        }
+    };
+    let _ = writer.send_full(
+        status,
+        &[("Content-Type", "application/json")],
+        payload.as_bytes(),
+    );
+}
+
 // Discovery, in Anthropic's shape rather than OpenAI's.
 //
 // Claude Desktop probes this before it will use a gateway at all, and an
@@ -649,6 +707,18 @@ fn register_routes(server: &mut Server, runtime: Arc<Runtime>) {
     server.route("POST", "/v1/messages", move |req, writer, stream| {
         handle_messages_route(&messages_runtime, req, writer, stream);
     });
+
+    // Claude Code counts a conversation's tokens through this before it
+    // sends it (`/context`, compaction decisions). Answered from the
+    // translator's own estimate instead of a 404 on every turn.
+    let count_runtime = runtime.clone();
+    server.route(
+        "POST",
+        "/v1/messages/count_tokens",
+        move |req, writer, _stream| {
+            handle_count_tokens_route(&count_runtime, req, writer);
+        },
+    );
 
     let models_runtime = runtime.clone();
     server.route("GET", "/v1/models", move |_req, writer, _stream| {
@@ -843,6 +913,31 @@ pub fn stop(shim: &mut Shim) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn another_claude_id_of_a_listed_family_reaches_that_familys_model() {
+        // The haiku slot borrowing an Opus name still answers for haiku.
+        let aliases: ModelAliases = vec![
+            ("claude-sonnet-4-6".to_string(), "glm".to_string()),
+            ("claude-opus-4-6".to_string(), "deepseek".to_string()),
+            ("claude-opus-4-5-20251101".to_string(), "mimo".to_string()),
+        ];
+        assert_eq!(
+            family_alias(&aliases, "claude-opus-5-5").as_deref(),
+            Some("deepseek")
+        );
+        assert_eq!(
+            family_alias(&aliases, "claude-sonnet-5").as_deref(),
+            Some("glm")
+        );
+        assert_eq!(
+            family_alias(&aliases, "Claude-Haiku-5-5").as_deref(),
+            Some("mimo")
+        );
+        assert_eq!(family_alias(&aliases, "claude-fable-5-1"), None);
+        assert_eq!(family_alias(&aliases, "opus"), None);
+        assert_eq!(family_alias(&ModelAliases::new(), "claude-opus-5-5"), None);
+    }
 
     #[test]
     fn a_1m_variant_names_the_same_model() {
