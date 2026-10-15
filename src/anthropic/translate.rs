@@ -794,8 +794,41 @@ pub fn request_to_openai(anthropic: &Value, model: &str) -> Value {
             openai.insert(dst.into(), v.clone());
         }
     }
+    if let Some(effort) = reasoning_effort(anthropic) {
+        openai.insert("reasoning_effort".into(), json!(effort));
+    }
 
     Value::Object(openai)
+}
+
+/// The levels the gateway takes as `reasoning_effort`, all of them accepted by
+/// every hosted model (checked live): `none` turns reasoning off, and the
+/// rest scale it on the models that grade it.
+const REASONING_EFFORTS: &[&str] = &["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+/// The `reasoning_effort` an Anthropic request asks for: `none` when thinking
+/// is turned off, else the level in `output_config.effort` (what Claude Code
+/// and Claude Desktop send from their effort setting). None when the request
+/// names neither, which leaves the model at its own default.
+fn reasoning_effort(anthropic: &Value) -> Option<&'static str> {
+    if anthropic
+        .get("thinking")
+        .and_then(|thinking| thinking.get("type"))
+        .and_then(Value::as_str)
+        == Some("disabled")
+    {
+        return Some("none");
+    }
+    let asked = anthropic
+        .get("output_config")
+        .and_then(|config| config.get("effort"))
+        .and_then(Value::as_str)?
+        .trim()
+        .to_ascii_lowercase();
+    REASONING_EFFORTS
+        .iter()
+        .find(|level| **level == asked)
+        .copied()
 }
 
 fn estimate_content_chars(content: &Value) -> usize {
@@ -1655,6 +1688,39 @@ mod tests {
         assert_eq!(stop_reason("tool_calls"), "tool_use");
         assert_eq!(stop_reason(""), "");
         assert_eq!(stop_reason("stop"), "end_turn");
+    }
+
+    #[test]
+    fn the_effort_claude_code_asks_for_reaches_the_upstream() {
+        let base = json!({"messages": [{"role": "user", "content": "hi"}]});
+        let with = |extra: Value| {
+            let mut request = base.clone();
+            for (key, value) in extra.as_object().unwrap() {
+                request[key] = value.clone();
+            }
+            request_to_openai(&request, "m")
+        };
+        let adaptive = json!({"type": "adaptive", "display": "omitted"});
+        assert_eq!(
+            with(json!({"thinking": adaptive, "output_config": {"effort": "low"}}))
+                ["reasoning_effort"],
+            "low"
+        );
+        assert_eq!(
+            with(json!({"output_config": {"effort": "MAX"}}))["reasoning_effort"],
+            "max"
+        );
+        assert_eq!(
+            with(json!({"thinking": {"type": "disabled"}, "output_config": {"effort": "high"}}))
+                ["reasoning_effort"],
+            "none"
+        );
+        assert!(with(json!({"output_config": {"effort": "turbo"}}))
+            .get("reasoning_effort")
+            .is_none());
+        assert!(request_to_openai(&base, "m")
+            .get("reasoning_effort")
+            .is_none());
     }
 
     #[test]
