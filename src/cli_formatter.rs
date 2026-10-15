@@ -1191,6 +1191,11 @@ mod tests {
                 ),
                 leaf("codex", "Open Codex with a model", "Coding tools"),
                 leaf(
+                    "chatgpt",
+                    "Open ChatGPT's Codex with a model",
+                    "Coding tools",
+                ),
+                leaf(
                     "opencode",
                     "Open OpenCode with a local or cloud model",
                     "Coding tools",

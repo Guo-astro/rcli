@@ -74,6 +74,7 @@ pub fn configure_app(app: &mut App) {
 
     crate::commands::register_editors(app);
     crate::commands::register_codex(app);
+    crate::commands::register_chatgpt(app);
     crate::commands::register_harness(app); // coding agents
     crate::commands::register_default_models(app);
 
@@ -127,6 +128,7 @@ pub fn configure_app(app: &mut App) {
                 "claude-code",
                 "claude-desktop",
                 "codex",
+                "chatgpt",
                 "hermes",
                 "openclaw",
                 "deepseek",
