@@ -20,9 +20,19 @@ pub const CODEX_KEY_VARIABLE: &str = "WALLY_CODEX_API_KEY";
 /// What Codex assumes when the catalog does not say: ollama's fallback.
 const FALLBACK_CONTEXT_WINDOW: i64 = 128_000;
 
-/// A TOML basic string. JSON's string escapes are valid TOML ones.
+/// A TOML string for a `-c` value, single-quoted (a literal string) whenever
+/// it can be. On Windows Codex is npm's `codex.cmd`, and a double quote cannot
+/// be passed safely through cmd.exe, so the launcher refuses one
+/// (`build_batch_command_line`); a literal string needs none and keeps a
+/// Windows path's backslashes as they are. A value holding a `'` or a control
+/// character cannot be a literal string and becomes a basic one, whose JSON
+/// escapes are valid TOML.
 fn toml_string(value: &str) -> String {
-    serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
+    if value.contains('\'') || value.chars().any(char::is_control) {
+        serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
+    } else {
+        format!("'{value}'")
+    }
 }
 
 /// One `model_catalog_json` entry: the fields ollama's working launcher
@@ -88,7 +98,7 @@ pub fn codex_overrides(
     let mut settings = vec![
         format!("model_provider={}", toml_string(provider)),
         format!(
-            "model_providers.{provider}={{name={}, base_url={}, wire_api=\"responses\", env_key={}, supports_websockets=false, capabilities={{remote_compaction=\"unsupported\"}}}}",
+            "model_providers.{provider}={{name={}, base_url={}, wire_api='responses', env_key={}, supports_websockets=false, capabilities={{remote_compaction='unsupported'}}}}",
             toml_string("RunAnywhere"),
             toml_string(base_url),
             toml_string(CODEX_KEY_VARIABLE),
@@ -98,7 +108,7 @@ pub fn codex_overrides(
         "features.enable_request_compression=false".to_string(),
         // Hosted search has no chat-completions equivalent; asking for it
         // would only have the tool dropped on every request.
-        "web_search=\"disabled\"".to_string(),
+        "web_search='disabled'".to_string(),
     ];
     if let Some(path) = catalog_path {
         settings.push(format!("model_catalog_json={}", toml_string(path)));
@@ -143,15 +153,17 @@ mod tests {
         let argv = codex_overrides("http://127.0.0.1:5000/v1", Some("/tmp/models.json"), 200000);
         let settings: Vec<&String> = argv.iter().skip(1).step_by(2).collect();
         assert!(argv.iter().step_by(2).all(|flag| flag == "-c"));
-        assert_eq!(settings[0], "model_provider=\"wally\"");
+        assert_eq!(settings[0], "model_provider='wally'");
         assert!(settings[1].starts_with("model_providers.wally={"));
-        assert!(settings[1].contains("base_url=\"http://127.0.0.1:5000/v1\""));
-        assert!(settings[1].contains("wire_api=\"responses\""));
-        assert!(settings[1].contains("env_key=\"WALLY_CODEX_API_KEY\""));
+        assert!(settings[1].contains("base_url='http://127.0.0.1:5000/v1'"));
+        assert!(settings[1].contains("wire_api='responses'"));
+        assert!(settings[1].contains("env_key='WALLY_CODEX_API_KEY'"));
         assert!(settings[1].contains("supports_websockets=false"));
-        assert!(settings[1].contains("remote_compaction=\"unsupported\""));
-        assert!(settings.contains(&&"web_search=\"disabled\"".to_string()));
-        assert!(settings.contains(&&"model_catalog_json=\"/tmp/models.json\"".to_string()));
+        assert!(settings[1].contains("remote_compaction='unsupported'"));
+        assert!(settings.contains(&&"web_search='disabled'".to_string()));
+        assert!(settings.contains(&&"model_catalog_json='/tmp/models.json'".to_string()));
+        // Codex on Windows is a .cmd shim, which cannot be handed a double quote.
+        assert!(!argv.iter().any(|a| a.contains('"')), "{argv:?}");
         assert!(settings.contains(&&"model_context_window=200000".to_string()));
     }
 
@@ -163,10 +175,15 @@ mod tests {
     }
 
     #[test]
-    fn a_catalog_path_with_quotes_stays_one_toml_string() {
-        let argv = codex_overrides("http://x/v1", Some("C:\\Users\\a \"b\"\\m.json"), 0);
-        assert!(argv
-            .contains(&"model_catalog_json=\"C:\\\\Users\\\\a \\\"b\\\"\\\\m.json\"".to_string()));
+    fn a_windows_path_keeps_its_backslashes_in_a_literal_string() {
+        let argv = codex_overrides("http://x/v1", Some("C:\\Users\\san\\m.json"), 0);
+        assert!(argv.contains(&"model_catalog_json='C:\\Users\\san\\m.json'".to_string()));
+    }
+
+    #[test]
+    fn a_value_with_a_single_quote_becomes_a_basic_string() {
+        let argv = codex_overrides("http://x/v1", Some("/Users/o'brien/m.json"), 0);
+        assert!(argv.contains(&"model_catalog_json=\"/Users/o'brien/m.json\"".to_string()));
     }
 
     #[test]
