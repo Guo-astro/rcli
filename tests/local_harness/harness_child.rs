@@ -124,7 +124,14 @@ fn run() -> Result<i32, String> {
     // needs --standalone); WALLY_TEST_OPENCODE_VERSION picks the answer.
     if args.len() == 2 && args[1] == "--version" {
         let version = env_str("WALLY_TEST_OPENCODE_VERSION");
-        println!("{}", if version.is_empty() { "1.18.34" } else { version.as_str() });
+        println!(
+            "{}",
+            if version.is_empty() {
+                "1.18.34"
+            } else {
+                version.as_str()
+            }
+        );
         return Ok(0);
     }
     let mut url = String::new();
