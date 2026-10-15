@@ -323,7 +323,7 @@ fn request_knobs_carry_over_and_codex_only_fields_do_not() {
 // ---------------------------------------------------------------------
 
 #[test]
-fn a_text_turn_emits_ollamas_proven_sequence() {
+fn a_text_turn_emits_the_responses_event_sequence() {
     let list = stream(
         plain_request(),
         &[

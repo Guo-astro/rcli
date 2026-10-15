@@ -6,10 +6,10 @@
 //! chunk at a time that returns the Responses SSE events to write, so a text
 //! or argument delta goes out the moment it arrives.
 //!
-//! The event sequence and the response object are the ones ollama's
-//! `openai/responses.go` emits, which Codex is known to accept. Where ollama
-//! has a gap (custom tools, namespaces with chat-safe names) the choice is
-//! noted where it is made.
+//! The event sequence and the response object follow the Responses streaming
+//! shape Codex accepts. Where a chat upstream needs a different spelling
+//! (custom tools, namespaces with chat-safe names) the choice is noted where it
+//! is made.
 
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, HashMap};
@@ -72,8 +72,8 @@ cannot access, say so plainly.";
 
 /// The `exec_command` parameters that ask for more sandbox than the session
 /// has. Under `danger-full-access` there is nothing to escalate to, and a model
-/// that sets them anyway gets the whole command refused (ollama
-/// `internal/proxy/codex_desktop_normalize.go`), so they are not offered.
+/// that sets them anyway gets the whole command refused, so they are not
+/// offered.
 const ESCALATION_PARAMETERS: &[&str] = &["sandbox_permissions", "justification", "prefix_rule"];
 
 fn text_of(value: &Value) -> &str {
@@ -678,8 +678,8 @@ impl StreamState {
         })
     }
 
-    /// The response object every lifecycle event carries: ollama's full field
-    /// list, so nothing Codex parses is missing from any of them.
+    /// The response object every lifecycle event carries: the full field list,
+    /// so nothing Codex parses is missing from any of them.
     fn response(&self, status: &str, output: Value, usage: Value, error: Value) -> Value {
         let completed_at = if status == "completed" {
             json!(now_unix())
@@ -788,9 +788,9 @@ impl StreamState {
                 "text": item.text,
             })),
         );
-        // `encrypted_content` holds the plain summary, as ollama sends it:
-        // Codex asked for it (`include`) and keeps the item whole. It is
-        // dropped again when the history comes back.
+        // `encrypted_content` holds the plain summary: Codex asked for it
+        // (`include`) and keeps the item whole. It is dropped again when the
+        // history comes back.
         let done = json!({
             "id": item.id,
             "type": "reasoning",

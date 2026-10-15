@@ -10,14 +10,14 @@ use serde_json::{json, Value};
 
 use super::catalog_models::CatalogModel;
 
-/// The provider id the overrides define. Not one of Codex's reserved ids
-/// (`openai`, `ollama`, `lmstudio`).
+/// The provider id the overrides define. Not one of Codex's reserved built-in
+/// provider ids.
 pub const CODEX_PROVIDER_ID: &str = "wally";
 
 /// The variable Codex reads the loopback token from (`env_key`).
 pub const CODEX_KEY_VARIABLE: &str = "WALLY_CODEX_API_KEY";
 
-/// What Codex assumes when the catalog does not say: ollama's fallback.
+/// The window declared when the catalog does not carry one.
 const FALLBACK_CONTEXT_WINDOW: i64 = 128_000;
 
 /// A TOML string for a `-c` value, written as a literal string so it needs no
@@ -38,8 +38,7 @@ fn toml_string(value: &str) -> String {
     }
 }
 
-/// One `model_catalog_json` entry: the fields ollama's working launcher
-/// writes. Codex has no metadata for a model it did not ship, and without an
+/// One `model_catalog_json` entry. Codex has no metadata for a model it did not ship, and without an
 /// entry it warns and falls back to defaults that fit no model here.
 fn catalog_entry(model: &CatalogModel, priority: usize) -> Value {
     let context_window = if model.context_window > 0 {
@@ -69,8 +68,7 @@ fn catalog_entry(model: &CatalogModel, priority: usize) -> Value {
         "supports_reasoning_summaries": true,
         "supported_reasoning_levels": [],
         "default_reasoning_level": Value::Null,
-        // The only value Codex 0.162 accepts. Leaving it out, as ollama does,
-        // leaves Codex with no apply_patch tool at all and the model editing
+        // The only value Codex 0.162 accepts. Leaving it out leaves Codex with no apply_patch tool at all and the model editing
         // files through shell heredocs; the translator carries the freeform
         // tool as a function and back.
         "apply_patch_tool_type": "freeform",
