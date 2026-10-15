@@ -1519,3 +1519,38 @@ fn a_refused_paste_does_not_refuse_the_next_prompt() {
         "what colour?[image omitted: mimo-v2.6-pro does not take image input]ok, forget the image: say hello"
     );
 }
+
+// Claude Code counts a conversation through this endpoint on every turn; a 404
+// there left its `/context` and compaction working from guesses.
+#[test]
+fn count_tokens_answers_from_the_translators_estimate() {
+    let _shim_guard = shim_lock::shim_lock();
+    let upstream = FakeUpstream::new();
+    let running = RunningShim::local(&upstream.base_url());
+    assert!(running.started());
+    let mut client = Client::new(
+        &running.shim().base_url,
+        Duration::from_secs(5),
+        Duration::from_secs(5),
+    )
+    .unwrap();
+    let body = serde_json::json!({
+        "model": "claude-x",
+        "messages": [{"role": "user", "content": "count these words please"}],
+    })
+    .to_string();
+    let ask = |client: &mut Client, token: Option<&str>| {
+        let mut request = Request::post("/v1/messages/count_tokens", body.clone().into_bytes())
+            .header("Content-Type", "application/json");
+        if let Some(token) = token {
+            request = request.header("Authorization", format!("Bearer {token}"));
+        }
+        client.send(&request, None, None).unwrap()
+    };
+    let reply = ask(&mut client, Some(&running.shim().auth_token));
+    assert_eq!(reply.status, 200);
+    let parsed: serde_json::Value = serde_json::from_slice(&reply.body).unwrap();
+    assert!(parsed["input_tokens"].as_i64().unwrap() > 0);
+    assert_eq!(ask(&mut client, Some("wrong")).status, 401);
+    assert_eq!(upstream.arrivals(), 0, "counting never goes upstream");
+}

@@ -12,14 +12,13 @@ use crate::cli::{App, ValueType};
 use crate::cli_formatter::{examples_footer, Example};
 use crate::codex;
 use crate::commands::cmd_editors::{
-    cloud_context_window, context_window_for_tool, context_window_problem,
-    copy_recursive_overwrite, text_only_ids, write_private, RemovedOnDrop, ScopedEnv,
+    cloud_context_window, context_window_for_tool, context_window_problem, text_only_ids,
+    write_private, RemovedOnDrop, ScopedEnv,
 };
 use crate::commands::resolve_default_model;
 use crate::config::cli_paths;
 use crate::harness::{self, codex as codex_config};
 use crate::io::output as out;
-use crate::util::getenv;
 
 const COMMAND: &str = "codex";
 
@@ -46,57 +45,26 @@ fn write_model_catalog(catalog: &[harness::CatalogModel]) -> RemovedOnDrop {
     }
 }
 
-/// What a wally Codex session takes from the reader's own Codex home: the
-/// settings (MCP servers, project trust, their own provider tables, which the
-/// `-c` overrides outrank), their instructions, and their skills, rules and
-/// agents. Never the sign-in, the sessions, the history or the databases.
-const CODEX_HOME_SEEDS: &[&str] = &["config.toml", "AGENTS.md", "skills", "rules", "agents"];
-
-/// The reader's Codex home: `CODEX_HOME` when they set one, else `~/.codex`.
-fn reader_codex_home() -> Option<PathBuf> {
-    if let Some(home) = getenv("CODEX_HOME").filter(|h| !h.is_empty()) {
-        return Some(PathBuf::from(home));
-    }
-    #[cfg(windows)]
-    let home = getenv("USERPROFILE").filter(|h| !h.is_empty());
-    #[cfg(not(windows))]
-    let home = getenv("HOME").filter(|h| !h.is_empty());
-    home.map(|home| Path::new(&home).join(".codex"))
-}
-
-/// A Codex home wally owns, seeded from the reader's on every launch.
+/// A Codex home of wally's own: the threads, settings and sign-in of a wally
+/// session stay apart from the reader's `~/.codex`, and nothing is copied
+/// between the two.
 ///
-/// Codex records every thread, with its provider and model, in its home's
-/// databases, and the reader's own Codex (the CLI, the IDE extension, the
-/// app) lists them all. A wally session there leaves threads naming a
-/// `wally` provider that exists only while wally runs, and a model the
-/// reader's Codex cannot serve. Running in a home of wally's own leaves
-/// nothing to undo when the session ends, however it ends -- Ctrl-C, a closed
-/// terminal, SIGKILL -- because nothing was written to the reader's.
-/// None without a usable state directory, in which case the reader's home is
-/// used as before rather than a root-level path.
-fn prepare_codex_home(state_dir: &str, reader: Option<&Path>) -> Option<PathBuf> {
+/// Codex records every thread, with its provider and model, in its home, and
+/// the reader's own Codex (the CLI, the IDE extension, the app) lists them
+/// all. A wally thread there names a `wally` provider that exists only while
+/// wally runs and a model the reader's Codex cannot serve. Kept apart, there
+/// is nothing to undo when a session ends, however it ends -- Ctrl-C, a closed
+/// terminal, SIGKILL. Everything wally needs reaches Codex as `-c` overrides,
+/// so the home starts empty and Codex fills it (project trust is asked once
+/// per folder, as on a first install). None without a usable state directory,
+/// in which case the reader's home is used rather than a root-level path.
+fn codex_home(state_dir: &str) -> Option<PathBuf> {
     if state_dir.is_empty() {
         return None;
     }
-    let ours = Path::new(state_dir).join("codex").join("home");
-    std::fs::create_dir_all(&ours).ok()?;
-    if let Some(reader) = reader {
-        for name in CODEX_HOME_SEEDS {
-            let source = reader.join(name);
-            let target = ours.join(name);
-            if source.is_dir() {
-                // A whole refresh, so a skill the reader deleted goes too.
-                let _ = std::fs::remove_dir_all(&target);
-                copy_recursive_overwrite(&source, &target);
-            } else if source.is_file() {
-                let _ = std::fs::copy(&source, &target);
-            } else {
-                let _ = std::fs::remove_file(&target);
-            }
-        }
-    }
-    Some(ours)
+    let home = Path::new(state_dir).join("codex").join("wally-home");
+    std::fs::create_dir_all(&home).ok()?;
+    Some(home)
 }
 
 /// Holds the translator open and prints what to point at it, for a client
@@ -169,7 +137,7 @@ fn run(
     let overrides =
         codex_config::codex_overrides(&shim.base_url, catalog_file.0.as_deref(), context);
     // The loopback token, never the upstream key, and only for this child.
-    let codex_home = prepare_codex_home(&cli_paths::state_dir(), reader_codex_home().as_deref());
+    let codex_home = codex_home(&cli_paths::state_dir());
     let status = {
         let _key = ScopedEnv::new(codex_config::CODEX_KEY_VARIABLE, &shim.auth_token);
         let _home = codex_home
@@ -263,50 +231,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_seeded_home_carries_settings_and_skills_but_no_threads_or_sign_in() {
-        let reader = tempfile::tempdir().unwrap();
+    fn the_home_is_wallys_own_and_starts_empty() {
         let state = tempfile::tempdir().unwrap();
-        for (name, body) in [
-            ("config.toml", "model = 'gpt'"),
-            ("AGENTS.md", "rules"),
-            ("auth.json", "secret"),
-            ("history.jsonl", "{}"),
-            ("state_5.sqlite", "db"),
-        ] {
-            std::fs::write(reader.path().join(name), body).unwrap();
-        }
-        std::fs::create_dir_all(reader.path().join("skills/one")).unwrap();
-        std::fs::write(reader.path().join("skills/one/SKILL.md"), "x").unwrap();
-        std::fs::create_dir_all(reader.path().join("sessions/2026")).unwrap();
-
-        let home =
-            prepare_codex_home(&state.path().to_string_lossy(), Some(reader.path())).unwrap();
+        let home = codex_home(&state.path().to_string_lossy()).unwrap();
         assert!(home.starts_with(state.path()));
-        assert_eq!(
-            std::fs::read_to_string(home.join("config.toml")).unwrap(),
-            "model = 'gpt'"
-        );
-        assert!(home.join("AGENTS.md").is_file());
-        assert!(home.join("skills/one/SKILL.md").is_file());
-        for absent in ["auth.json", "history.jsonl", "state_5.sqlite", "sessions"] {
-            assert!(!home.join(absent).exists(), "{absent}");
-        }
-    }
-
-    #[test]
-    fn a_skill_the_reader_deleted_leaves_the_seeded_home_too() {
-        let reader = tempfile::tempdir().unwrap();
-        let state = tempfile::tempdir().unwrap();
-        let state_dir = state.path().to_string_lossy().into_owned();
-        std::fs::create_dir_all(reader.path().join("skills/old")).unwrap();
-        prepare_codex_home(&state_dir, Some(reader.path())).unwrap();
-        std::fs::remove_dir_all(reader.path().join("skills/old")).unwrap();
-        let home = prepare_codex_home(&state_dir, Some(reader.path())).unwrap();
-        assert!(!home.join("skills/old").exists());
+        assert!(home.is_dir());
+        assert_eq!(std::fs::read_dir(&home).unwrap().count(), 0);
     }
 
     #[test]
     fn no_state_directory_means_no_home_of_our_own() {
-        assert_eq!(prepare_codex_home("", None), None);
+        assert_eq!(codex_home(""), None);
     }
 }

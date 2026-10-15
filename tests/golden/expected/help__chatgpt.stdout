@@ -1,0 +1,17 @@
+Open ChatGPT's Codex with a model
+
+Usage: wally chatgpt [OPTIONS]
+
+Options:
+  -h, --help                  Show help
+  -m, --model TEXT            A model on this machine, or a hosted one from your
+                              account
+      --context-window INT    Tell the app the model holds this many tokens, so
+                              it compacts sooner
+
+Examples:
+  # The certified local coding model
+  wally chatgpt -m qwen3-4b-instruct-2507
+
+  # A hosted model (needs `wally account login`)
+  wally chatgpt -m glm-5.3-flash

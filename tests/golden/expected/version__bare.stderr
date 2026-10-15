@@ -18,6 +18,7 @@ Coding tools:
   claude-code                 Open Claude Code with a model
   claude-desktop              Open Claude Desktop with a model
   codex                       Open Codex with a model
+  chatgpt                     Open ChatGPT's Codex with a model
   opencode                    Open OpenCode with a local or cloud model
   hermes                      Open Hermes with a model
   openclaw                    Open OpenClaw with a model

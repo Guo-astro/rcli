@@ -300,6 +300,13 @@
   ]
  },
  {
+  "name": "help__chatgpt",
+  "args": [
+   "help",
+   "chatgpt"
+  ]
+ },
+ {
   "name": "help__deepseek",
   "args": [
    "help",
@@ -465,6 +472,14 @@
   "args": [
    "help",
    "codex",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__help__chatgpt",
+  "args": [
+   "help",
+   "chatgpt",
    "--help"
   ]
  },

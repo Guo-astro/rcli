@@ -505,6 +505,9 @@ pub fn request_to_chat(request: &Value, model: &str) -> Result<ChatRequest, Stri
     if let Some(limit) = request.get("max_output_tokens").filter(|v| v.is_number()) {
         body.insert("max_tokens".into(), limit.clone());
     }
+    if let Some(effort) = reasoning_effort(request) {
+        body.insert("reasoning_effort".into(), json!(effort));
+    }
     if let Some(format) = request.get("text").and_then(|t| t.get("format")) {
         if format.get("type").and_then(Value::as_str) == Some("json_schema") {
             let mut schema = Map::new();
@@ -547,6 +550,28 @@ pub fn request_to_chat(request: &Value, model: &str) -> Result<ChatRequest, Stri
             reasoning: echo("reasoning"),
         },
     })
+}
+
+/// Codex's reasoning levels as the gateway's `reasoning_effort`, which every
+/// hosted model accepts at all seven of its levels (checked live). `ultra` is
+/// above the gateway's top level and becomes `max`; a level the gateway does
+/// not have (`persistent`, a model-defined name) leaves the model at its
+/// default rather than failing the turn.
+fn reasoning_effort(request: &Value) -> Option<&'static str> {
+    let asked = request
+        .get("reasoning")
+        .and_then(|reasoning| reasoning.get("effort"))
+        .and_then(Value::as_str)?;
+    match asked {
+        "none" => Some("none"),
+        "minimal" => Some("minimal"),
+        "low" => Some("low"),
+        "medium" => Some("medium"),
+        "high" => Some("high"),
+        "xhigh" => Some("xhigh"),
+        "max" | "ultra" => Some("max"),
+        _ => None,
+    }
 }
 
 /// A rough token count for a request whose upstream reports no usage: the
@@ -788,14 +813,17 @@ impl StreamState {
                 "text": item.text,
             })),
         );
-        // `encrypted_content` holds the plain summary: Codex asked for it
-        // (`include`) and keeps the item whole. It is dropped again when the
-        // history comes back.
+        // No `encrypted_content`, although Codex asks for it (`include`).
+        // Codex keeps the item in the thread and sends it back as it is to
+        // whichever provider continues the thread, and OpenAI refuses the
+        // whole request when that field holds anything it did not encrypt
+        // itself ("The encrypted content for item rs_... could not be
+        // verified"). Without it the thread continues on OpenAI as it does
+        // here, where reasoning is dropped on the way in.
         let done = json!({
             "id": item.id,
             "type": "reasoning",
             "summary": [{"type": "summary_text", "text": item.text}],
-            "encrypted_content": item.text,
         });
         out += &self.event(
             "response.output_item.done",

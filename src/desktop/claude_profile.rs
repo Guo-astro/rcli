@@ -116,6 +116,9 @@ pub fn profile_directory() -> String {
     support_root(true)
 }
 
+/// The tier each picker slot stands in for, in picker order.
+pub const DESKTOP_TIERS: [&str; 3] = ["sonnet", "opus", "haiku"];
+
 /// Writes the gateway profile, marks it applied, and switches both config
 /// trees to third-party mode.
 ///
@@ -170,8 +173,19 @@ pub fn apply_gateway(
         // rather than the one we route under.
         let inference: Vec<Value> = models
             .iter()
-            .map(|(name, label)| {
+            .enumerate()
+            .map(|(index, (name, label))| {
                 let mut entry = json!({"name": name, "labelOverride": label});
+                // The tier this entry stands in for, by its place in the
+                // picker (`DESKTOP_TIERS`), so the app resolves its bare tier
+                // names ("opus" in a Code session) to this entry rather than
+                // to the newest Claude model of that tier, which it would then
+                // size, and ask for, as itself. By place and not by name: a
+                // slot may borrow another family's name for its window or its
+                // effort control and still stand in for its own tier.
+                if let Some(tier) = DESKTOP_TIERS.get(index) {
+                    entry["anthropicFamilyTier"] = json!(tier);
+                }
                 // `supports1m` offers the 1M variant; `prefer1m` makes it the
                 // only one, so every session asks for the window the model has.
                 if million_token.contains(name) {
@@ -186,6 +200,9 @@ pub fn apply_gateway(
         // otherwise skip discovery, and the picker then has nothing to
         // reconcile the served model against.
         obj.insert("modelDiscoveryEnabled".to_string(), json!(true));
+        // Every new conversation opens on the model wally was launched with
+        // (the first entry), not on whatever was picked last time.
+        obj.insert("alwaysStartWithDefaultModel".to_string(), json!(true));
     }
     write_object(&profile_path(), &profile)?;
 
@@ -279,6 +296,7 @@ pub fn restore_gateway() -> Result<(), String> {
         "autoModeEnabled",
         "coworkTabEnabled",
         "modelDiscoveryEnabled",
+        "alwaysStartWithDefaultModel",
     ] {
         obj.remove(key);
     }
