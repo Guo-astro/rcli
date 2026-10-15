@@ -725,15 +725,15 @@ mod tests {
     }
 
     fn client_answering(status: i32, body: &'static str) -> ConsoleClient {
-        ConsoleClient::new(Some(Arc::new(
-            move |_: &HttpRequest| -> Result<HttpResponse, String> {
+        ConsoleClient::new(Some(
+            Arc::new(move |_: &HttpRequest| -> Result<HttpResponse, String> {
                 Ok(HttpResponse {
                     status,
                     body: body.to_string(),
                     ..Default::default()
                 })
-            },
-        ) as Transport))
+            }) as Transport,
+        ))
     }
 
     fn signed_in_credentials() -> Credentials {
