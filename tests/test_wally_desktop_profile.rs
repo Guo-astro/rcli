@@ -128,7 +128,12 @@ fn million_token_models_are_offered_at_1m_and_the_rest_are_not() {
     assert_eq!(entries[0]["supports1m"], true);
     assert_eq!(entries[0]["prefer1m"], true);
     assert_eq!(entries[0]["labelOverride"], "glm-5.3-flash");
+    assert_eq!(entries[0]["anthropicFamilyTier"], "sonnet");
+    assert_eq!(entries[1]["anthropicFamilyTier"], "opus");
+    // By place, not by the borrowed name.
+    assert!(entries[0]["name"].as_str().unwrap().contains("sonnet"));
     assert!(entries[1].get("supports1m").is_none());
+    assert_eq!(doc["alwaysStartWithDefaultModel"], true);
     assert!(entries[1].get("prefer1m").is_none());
 
     wally::desktop::restore_gateway().expect("restored");

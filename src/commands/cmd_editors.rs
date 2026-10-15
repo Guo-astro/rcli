@@ -467,6 +467,43 @@ fn million_token_aliases(aliases: &ModelAliases, catalog: &[harness::CatalogMode
         .collect()
 }
 
+/// The Anthropic family name the `index`th picker slot is listed under.
+///
+/// The name decides two things in the app. Its window: Claude Code, inside
+/// Claude Desktop, sizes a recognised Claude model by that model's own window,
+/// so Opus 5 and Haiku 5.5 run at 1M whatever the profile says, while Sonnet
+/// 4.6 and Opus 4.6 run at 200K unless their entry offers 1M. And whether the
+/// effort control shows: the app offers it only for models that take effort
+/// (Sonnet 4.6, Opus 4.5 and later, Haiku 5.5). A slot whose model holds 1M,
+/// or whose window is unknown, gets the 1M name; any other, including when
+/// `--context-window` asks for less, gets a 200K one. No 200K Haiku takes
+/// effort, so that slot borrows Opus 4.5 (200K, effort low to high); the
+/// profile still pins it to the haiku tier (`desktop::apply_gateway`), so the
+/// app's background haiku requests reach it.
+fn desktop_family(
+    index: usize,
+    model: &harness::CatalogModel,
+    context_override: Option<i64>,
+) -> &'static str {
+    // Held below 1M by `--context-window`: every slot takes its 1M name, which
+    // all take effort, and the app's Claude Code is told to size them at
+    // 200K instead (`CLAUDE_CODE_DISABLE_1M_CONTEXT`, see `run`).
+    let held = context_override.is_some_and(|asked| asked < MILLION_TOKENS);
+    let window = context_override.unwrap_or(model.context_window);
+    let million = held || window == 0 || window >= MILLION_TOKENS;
+    match (index, million) {
+        (0, _) => DESKTOP_DEFAULT_FAMILY,
+        (1, true) => "claude-opus-5",
+        (1, false) => "claude-opus-4-6",
+        (_, true) => "claude-haiku-5-5",
+        (_, false) => "claude-opus-4-5-20251101",
+    }
+}
+
+/// The family the launched model, first in the picker, is listed under, and
+/// the one id discovery advertises.
+const DESKTOP_DEFAULT_FAMILY: &str = "claude-sonnet-4-6";
+
 /// The families Claude Desktop is told hold 1M tokens. The app picks between
 /// only two windows, the Claude model's own (200K) and 1M, so a
 /// `--context-window` below 1M keeps every entry at 200K.
@@ -585,7 +622,7 @@ fn run(
     // model the reader asked for. Only the desktop app needs this; the CLI
     // takes the real id happily.
     let advertised = if editor.wiring == Wiring::ClaudeProfile {
-        "claude-sonnet-4-5".to_string()
+        DESKTOP_DEFAULT_FAMILY.to_string()
     } else {
         model.to_string()
     };
@@ -598,13 +635,11 @@ fn run(
     let catalog = harness::catalog_models_for(&endpoint, model);
     let mut desktop_aliases: ModelAliases = Vec::new();
     if editor.wiring == Wiring::ClaudeProfile {
-        const FAMILIES: [&str; 3] = [
-            "claude-sonnet-4-5",
-            "claude-opus-5",
-            "claude-haiku-4-5-20251001",
-        ];
         for (index, catalog_model) in catalog.iter().take(3).enumerate() {
-            desktop_aliases.push((FAMILIES[index].to_string(), catalog_model.id.clone()));
+            desktop_aliases.push((
+                desktop_family(index, catalog_model, context_override).to_string(),
+                catalog_model.id.clone(),
+            ));
         }
     }
 
@@ -745,12 +780,19 @@ fn run(
         // A new instance reads the gateway profile at startup. The one already
         // running keeps the profile it started with, and keeps whatever the
         // reader has open in it, which is the trade we want.
-        status = harness::launch(
-            "open",
-            "",
-            &editor_env::open_args(&bundle, &shim, args, model),
-            options,
-        );
+        let mut open_args = editor_env::open_args(&bundle, &shim, args, model);
+        if context_override.is_some_and(|asked| asked < MILLION_TOKENS) {
+            // Claude Code inside the app sizes the 1M names above at 200K
+            // with this, the smallest window the app has.
+            open_args.splice(
+                2..2,
+                [
+                    "--env".to_string(),
+                    "CLAUDE_CODE_DISABLE_1M_CONTEXT=1".to_string(),
+                ],
+            );
+        }
+        status = harness::launch("open", "", &open_args, options);
         finished.store(true, std::sync::atomic::Ordering::SeqCst);
         let _done = applied.lock().unwrap_or_else(|poison| poison.into_inner());
         if let Err(failure) = desktop::restore_gateway() {
@@ -1064,6 +1106,40 @@ mod tests {
         assert!(context_window_problem(Some(1_000)).is_some());
         assert!(context_window_problem(Some(16_384)).is_none());
         assert!(context_window_problem(None).is_none());
+    }
+
+    #[test]
+    fn each_slot_takes_a_name_with_the_models_window_and_effort_where_one_exists() {
+        let model = |context_window: i64| harness::CatalogModel {
+            id: "m".to_string(),
+            context_window,
+            ..Default::default()
+        };
+        assert_eq!(desktop_family(1, &model(1_048_567), None), "claude-opus-5");
+        assert_eq!(desktop_family(1, &model(0), None), "claude-opus-5");
+        assert_eq!(desktop_family(1, &model(200_000), None), "claude-opus-4-6");
+        // Held below 1M, the 1M names (which take effort) are sized at 200K
+        // by CLAUDE_CODE_DISABLE_1M_CONTEXT instead.
+        assert_eq!(
+            desktop_family(1, &model(1_048_567), Some(17_000)),
+            "claude-opus-5"
+        );
+        assert_eq!(
+            desktop_family(0, &model(200_000), None),
+            "claude-sonnet-4-6"
+        );
+        assert_eq!(
+            desktop_family(2, &model(1_048_567), None),
+            "claude-haiku-5-5"
+        );
+        assert_eq!(
+            desktop_family(2, &model(1_048_567), Some(17_000)),
+            "claude-haiku-5-5"
+        );
+        assert_eq!(
+            desktop_family(2, &model(200_000), None),
+            "claude-opus-4-5-20251101"
+        );
     }
 
     #[test]
