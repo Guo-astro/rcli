@@ -28,24 +28,24 @@ const CONFIG_VARIABLE: &str = "OPENCODE_CONFIG_CONTENT";
 // `--standalone` gives the launch a private server of its own, started with
 // the launch's environment. OpenCode 1.x has no service and no such flag.
 const STANDALONE_FLAG: &str = "--standalone";
-// The OpenCode 2 commands that open a session and take `--standalone`
-// (`opencode <command> --help`, 2.0.28). Every other command (auth, mcp,
-// plugin, service, upgrade, ...) is passed through untouched.
-const SERVER_BACKED_COMMANDS: [&str; 8] = [
-    "run", "mini", "acp", "models", "session", "api", "debug", "stats",
+// Where OpenCode 2 accepts `--standalone`, read from each command's own FLAGS
+// in `opencode <command> --help` (2.0.28). Its parser refuses a flag the
+// command does not declare, and a root flag placed before a subcommand, so the
+// flag goes only where it is declared: after one of these commands, after
+// `session <one of these>`, or first when no command follows (the interactive
+// UI). Everything else (acp, debug, mcp, plugin, service, ...) is untouched.
+const STANDALONE_COMMANDS: [&str; 6] = ["run", "mini", "models", "api", "stats", "reload"];
+const STANDALONE_SESSION_COMMANDS: [&str; 4] = ["list", "delete", "export", "import"];
+// Global flags may come before the command; the ones that take a value.
+const GLOBAL_FLAGS: [&str; 6] = [
+    "--help",
+    "-h",
+    "--version",
+    "-v",
+    "--wizard",
+    "--print-logs",
 ];
-const OTHER_COMMANDS: [&str; 10] = [
-    "upgrade",
-    "update",
-    "uninstall",
-    "auth",
-    "mcp",
-    "plugin",
-    "service",
-    "reload",
-    "pair",
-    "serve",
-];
+const GLOBAL_VALUE_FLAGS: [&str; 2] = ["--log-level", "--completions"];
 
 /// The major version in `opencode --version` output ("opencode v2.0.28",
 /// "1.18.34"), or None when there is none to read.
@@ -78,12 +78,11 @@ pub fn installed_open_code_major_version() -> Option<u64> {
     })
 }
 
-/// `arguments` with `--standalone` where OpenCode 2 needs it (see
-/// STANDALONE_FLAG): after a session command, or ahead of everything when
-/// the launch opens the interactive UI (no command, a flag, a directory or a
-/// prompt first). Unchanged for OpenCode 1 or an unknown version, for a
-/// command that is not a session's, and when the person already chose a
-/// server (`--standalone` or `--server`).
+/// `arguments` with `--standalone` where OpenCode 2 needs it and takes it
+/// (see STANDALONE_FLAG and STANDALONE_COMMANDS). Unchanged for OpenCode 1
+/// or an unknown version, for a command that takes no such flag or that this
+/// does not know, and when the person already chose a server (`--standalone`
+/// or `--server`).
 pub fn with_private_server(arguments: &[String], major_version: Option<u64>) -> Vec<String> {
     let chose_server = arguments
         .iter()
@@ -91,12 +90,38 @@ pub fn with_private_server(arguments: &[String], major_version: Option<u64>) -> 
     if major_version.unwrap_or(0) < 2 || chose_server {
         return arguments.to_vec();
     }
-    let first = arguments.first().map(String::as_str).unwrap_or("");
+    // The first word after any global flags (and their values).
+    let mut index = 0;
+    while let Some(arg) = arguments.get(index) {
+        if GLOBAL_FLAGS.contains(&arg.as_str())
+            || GLOBAL_VALUE_FLAGS
+                .iter()
+                .any(|flag| arg.starts_with(&format!("{flag}=")))
+        {
+            index += 1;
+        } else if GLOBAL_VALUE_FLAGS.contains(&arg.as_str()) {
+            index += 2;
+        } else {
+            break;
+        }
+    }
+    let word = arguments.get(index).map(String::as_str);
+    let insert_at = match word {
+        Some(command) if STANDALONE_COMMANDS.contains(&command) => Some(index + 1),
+        Some("session") => arguments
+            .get(index + 1)
+            .filter(|sub| STANDALONE_SESSION_COMMANDS.contains(&sub.as_str()))
+            .map(|_| index + 2),
+        // No command: the interactive UI, given nothing, a flag of its own, or
+        // the directory to open.
+        None => Some(0),
+        Some(other) if other.starts_with('-') || std::path::Path::new(other).exists() => Some(0),
+        // A command that takes no `--standalone`, or one this does not know.
+        Some(_) => None,
+    };
     let mut out = arguments.to_vec();
-    if SERVER_BACKED_COMMANDS.contains(&first) {
-        out.insert(1, STANDALONE_FLAG.to_string());
-    } else if !OTHER_COMMANDS.contains(&first) {
-        out.insert(0, STANDALONE_FLAG.to_string());
+    if let Some(at) = insert_at {
+        out.insert(at, STANDALONE_FLAG.to_string());
     }
     out
 }
