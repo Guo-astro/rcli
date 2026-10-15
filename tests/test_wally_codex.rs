@@ -306,16 +306,28 @@ fn request_knobs_carry_over_and_codex_only_fields_do_not() {
     );
     assert_eq!(body["parallel_tool_calls"], false);
     assert_eq!(body["response_format"]["json_schema"]["name"], "out");
-    for absent in [
-        "store",
-        "include",
-        "reasoning",
-        "reasoning_effort",
-        "prompt_cache_key",
-        "input",
-    ] {
+    for absent in ["store", "include", "reasoning", "prompt_cache_key", "input"] {
         assert!(body.get(absent).is_none(), "{absent}");
     }
+    assert_eq!(body["reasoning_effort"], "medium");
+}
+
+#[test]
+fn codex_effort_levels_reach_the_upstream() {
+    let effort = |level: &str| {
+        chat(json!({"input": "q", "reasoning": {"effort": level, "summary": "auto"}})).body
+            ["reasoning_effort"]
+            .clone()
+    };
+    for level in ["none", "minimal", "low", "medium", "high", "xhigh", "max"] {
+        assert_eq!(effort(level), level);
+    }
+    assert_eq!(effort("ultra"), "max");
+    assert_eq!(effort("persistent"), Value::Null);
+    assert!(chat(json!({"input": "q"}))
+        .body
+        .get("reasoning_effort")
+        .is_none());
 }
 
 // ---------------------------------------------------------------------
@@ -453,7 +465,9 @@ fn reasoning_streams_as_a_summary_closed_before_the_text() {
     let reasoning = &list[5].1["item"];
     assert_eq!(reasoning["type"], "reasoning");
     assert_eq!(reasoning["summary"][0]["text"], "think");
-    assert_eq!(reasoning["encrypted_content"], "think");
+    // Codex sends the item back to whichever provider continues the thread,
+    // and OpenAI refuses an `encrypted_content` it did not write.
+    assert!(reasoning.get("encrypted_content").is_none());
     assert_eq!(list[6].1["item"]["type"], "message");
     assert_eq!(list[6].1["output_index"], 1);
 }
