@@ -39,17 +39,41 @@ fn root_key(line: &str) -> Option<&str> {
     Some(key.trim())
 }
 
+/// One `[table]` of the file and the lines under it, kept as written.
+struct Section {
+    /// The table's name (`features`, `projects."/x"`); None for `[[array]]`
+    /// headers, which are kept as they are.
+    name: Option<String>,
+    header: String,
+    body: Vec<String>,
+}
+
+fn table_name(header: &str) -> Option<String> {
+    let trimmed = header.trim();
+    if trimmed.starts_with("[[") {
+        return None;
+    }
+    let inner = trimmed.strip_prefix('[')?.split(']').next()?;
+    Some(inner.trim().to_string())
+}
+
 /// `existing` (the home's `config.toml`, empty when there is none) with the
 /// managed block replaced by `settings`.
 ///
 /// The block goes first, because root-level keys must come before any table.
-/// A root-level line elsewhere that sets one of the same keys is dropped, so
-/// the file never names a key twice, which TOML refuses.
+/// The file must never define a key or a table twice, which TOML refuses and
+/// the app would then refuse on every launch, so:
+/// - a root-level line elsewhere that sets one of the same keys is dropped;
+/// - a dotted setting (`features.x=...`) whose table the file already has as
+///   `[features]` is written inside that table instead, replacing only its
+///   own key there, since the app may keep its own toggles in it;
+/// - a table that is the setting itself (`[model_providers.wally]`) is wally's
+///   and is dropped in favour of the managed line.
 pub fn chatgpt_config(existing: &str, settings: &[String]) -> String {
     let ours: Vec<&str> = settings.iter().filter_map(|line| root_key(line)).collect();
-    let mut kept = Vec::new();
+    let mut root = Vec::new();
+    let mut sections: Vec<Section> = Vec::new();
     let mut in_block = false;
-    let mut in_table = false;
     for line in existing.lines() {
         let trimmed = line.trim();
         if trimmed == BLOCK_BEGIN {
@@ -63,28 +87,76 @@ pub fn chatgpt_config(existing: &str, settings: &[String]) -> String {
             continue;
         }
         if trimmed.starts_with('[') {
-            in_table = true;
-        }
-        if !in_table && root_key(line).is_some_and(|key| ours.contains(&key)) {
+            sections.push(Section {
+                name: table_name(trimmed),
+                header: line.to_string(),
+                body: Vec::new(),
+            });
             continue;
         }
-        kept.push(line);
+        match sections.last_mut() {
+            Some(section) => section.body.push(line.to_string()),
+            None => {
+                if !root_key(line).is_some_and(|key| ours.contains(&key)) {
+                    root.push(line.to_string());
+                }
+            }
+        }
     }
-    while kept.first().is_some_and(|line| line.trim().is_empty()) {
-        kept.remove(0);
+
+    let mut block = Vec::new();
+    for line in settings {
+        let Some((table, key)) = root_key(line).and_then(|full| full.split_once('.')) else {
+            block.push(line.clone());
+            continue;
+        };
+        let own = format!("{table}.{key}");
+        sections.retain(|section| {
+            section
+                .name
+                .as_deref()
+                .is_none_or(|name| name != own && !name.starts_with(&format!("{own}.")))
+        });
+        let value = line.split_once('=').map(|(_, value)| value).unwrap_or("");
+        match sections
+            .iter_mut()
+            .find(|section| section.name.as_deref() == Some(table))
+        {
+            Some(section) => {
+                section
+                    .body
+                    .retain(|body_line| root_key(body_line) != Some(key));
+                let at = section
+                    .body
+                    .iter()
+                    .rposition(|body_line| !body_line.trim().is_empty())
+                    .map_or(0, |last| last + 1);
+                section.body.insert(at, format!("{key}={value}"));
+            }
+            None => block.push(line.clone()),
+        }
+    }
+
+    while root.first().is_some_and(|line| line.trim().is_empty()) {
+        root.remove(0);
     }
     let mut out = String::new();
     out.push_str(BLOCK_BEGIN);
     out.push('\n');
-    for line in settings {
+    for line in &block {
         out.push_str(line);
         out.push('\n');
     }
     out.push_str(BLOCK_END);
     out.push('\n');
-    if !kept.is_empty() {
+    let mut rest: Vec<String> = root;
+    for section in sections {
+        rest.push(section.header);
+        rest.extend(section.body);
+    }
+    if !rest.is_empty() {
         out.push('\n');
-        out.push_str(&kept.join("\n"));
+        out.push_str(&rest.join("\n"));
         out.push('\n');
     }
     out
@@ -191,6 +263,47 @@ mod tests {
         assert_eq!(root.iter().filter(|key| **key == "model").count(), 1);
         assert!(root.contains(&"notify"));
         assert!(config.contains("[tui]\nmodel = \"kept, a table key\""));
+    }
+
+    /// The app may keep its own `[features]` toggles; wally's key goes into
+    /// that table rather than being defined a second time above it.
+    #[test]
+    fn a_setting_whose_table_the_file_already_has_goes_inside_it() {
+        let existing = "[features]\nsome_app_toggle = true\nenable_request_compression = true\n\n[projects.\"/x\"]\ntrust_level = \"trusted\"\n";
+        let config = chatgpt_config(existing, &settings());
+        let block_end = config.find(BLOCK_END).unwrap();
+        assert!(!config[..block_end].contains("features."));
+        let features = config.split("[features]").nth(1).unwrap();
+        let features = features.split("\n[").next().unwrap();
+        assert!(features.contains("some_app_toggle = true"));
+        assert!(features.contains("enable_request_compression=false"));
+        assert!(!features.contains("enable_request_compression = true"));
+        assert!(config.contains("[projects.\"/x\"]\ntrust_level = \"trusted\""));
+        // Rewriting it again changes nothing.
+        assert_eq!(chatgpt_config(&config, &settings()), config);
+    }
+
+    #[test]
+    fn a_table_that_is_wallys_own_setting_is_replaced_by_the_managed_line() {
+        let existing = "[model_providers.wally]\nname = \"old\"\nbase_url = \"http://stale/v1\"\n\n[model_providers.wally.extra]\nx = 1\n\n[model_providers.other]\nname = \"kept\"\n";
+        let config = chatgpt_config(existing, &settings());
+        assert!(!config.contains("[model_providers.wally]"));
+        assert!(!config.contains("[model_providers.wally.extra]"));
+        assert!(!config.contains("http://stale/v1"));
+        assert!(config.contains("[model_providers.other]\nname = \"kept\""));
+        assert_eq!(config.matches("model_providers.wally=").count(), 1);
+    }
+
+    #[test]
+    fn a_providers_table_takes_wallys_provider_as_a_key() {
+        let existing = "[model_providers]\nother = { name = \"kept\" }\n";
+        let config = chatgpt_config(existing, &settings());
+        let block_end = config.find(BLOCK_END).unwrap();
+        assert!(!config[..block_end].contains("model_providers."));
+        let providers = config.split("[model_providers]").nth(1).unwrap();
+        assert!(providers.contains("other = { name = \"kept\" }"));
+        assert!(providers.contains("wally={name='RunAnywhere'"));
+        assert_eq!(chatgpt_config(&config, &settings()), config);
     }
 
     #[test]
