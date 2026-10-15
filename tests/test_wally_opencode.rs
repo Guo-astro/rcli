@@ -442,26 +442,52 @@ fn opencode_version_output_is_read_for_its_major_version() {
 
 // OpenCode 2 answers every launch from a background service that never saw
 // the launch's OPENCODE_CONFIG_CONTENT (2.0.28 ran "build · cat-jam-free"
-// instead of the runanywhere model), so a launch asks for a private server.
+// instead of the runanywhere model), so a launch asks for a private server,
+// only where OpenCode declares `--standalone` (its parser refuses it anywhere
+// else).
 #[test]
 fn opencode_two_launches_get_a_private_server() {
     let v2 = Some(2);
-    assert_eq!(
-        harness::with_private_server(&strings(&["run", "Reply OK"]), v2),
-        strings(&["run", "--standalone", "Reply OK"])
-    );
-    assert_eq!(
-        harness::with_private_server(&[], v2),
-        strings(&["--standalone"])
-    );
-    assert_eq!(
-        harness::with_private_server(&strings(&["--continue"]), v2),
-        strings(&["--standalone", "--continue"])
-    );
-    assert_eq!(
-        harness::with_private_server(&strings(&["some/project"]), v2),
-        strings(&["--standalone", "some/project"])
-    );
+    let directory = std::env::temp_dir().to_string_lossy().to_string();
+    for (args, expected) in [
+        (
+            strings(&["run", "Reply OK"]),
+            strings(&["run", "--standalone", "Reply OK"]),
+        ),
+        (strings(&[]), strings(&["--standalone"])),
+        (
+            strings(&["--continue"]),
+            strings(&["--standalone", "--continue"]),
+        ),
+        (
+            strings(&[&directory]),
+            strings(&["--standalone", &directory]),
+        ),
+        (strings(&["models"]), strings(&["models", "--standalone"])),
+        (
+            strings(&["session", "list"]),
+            strings(&["session", "list", "--standalone"]),
+        ),
+        // Global flags may come first; the flag still goes after the command.
+        (
+            strings(&["--print-logs", "run", "x"]),
+            strings(&["--print-logs", "run", "--standalone", "x"]),
+        ),
+        (
+            strings(&["--log-level", "debug", "run", "x"]),
+            strings(&["--log-level", "debug", "run", "--standalone", "x"]),
+        ),
+        (
+            strings(&["--log-level=debug", "run", "x"]),
+            strings(&["--log-level=debug", "run", "--standalone", "x"]),
+        ),
+    ] {
+        assert_eq!(
+            harness::with_private_server(&args, v2),
+            expected,
+            "{args:?}"
+        );
+    }
     assert_eq!(
         harness::with_private_server(&strings(&["mini"]), Some(3)),
         strings(&["mini", "--standalone"])
@@ -475,14 +501,24 @@ fn opencode_launches_that_need_no_private_server_are_untouched() {
     // given a flag it may not take.
     assert_eq!(harness::with_private_server(&run, Some(1)), run);
     assert_eq!(harness::with_private_server(&run, None), run);
-    // A command that opens no session, and a server the person chose.
+    // Commands that do not declare the flag (acp is how editors start it),
+    // a session command that does not, one this does not know, and a server
+    // the person chose.
     for args in [
+        strings(&["acp"]),
+        strings(&["debug", "config"]),
+        strings(&["session"]),
         strings(&["auth", "login"]),
         strings(&["service", "stop"]),
+        strings(&["a-command-from-a-later-opencode"]),
         strings(&["run", "--standalone", "Reply OK"]),
         strings(&["run", "--server", "http://127.0.0.1:4096", "Reply OK"]),
         strings(&["--server=http://127.0.0.1:4096"]),
     ] {
-        assert_eq!(harness::with_private_server(&args, Some(2)), args);
+        assert_eq!(
+            harness::with_private_server(&args, Some(2)),
+            args,
+            "{args:?}"
+        );
     }
 }
