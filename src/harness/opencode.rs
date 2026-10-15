@@ -18,6 +18,89 @@ pub type SpawnFunction = std::sync::Arc<dyn Fn(&str, &[String]) -> i32 + Send + 
 
 const CONFIG_VARIABLE: &str = "OPENCODE_CONFIG_CONTENT";
 
+// OpenCode 2 serves `opencode`, `opencode run` and its other session commands
+// from a BACKGROUND SERVICE (`opencode serve --service`) that starts once and
+// stays up. The command a launch starts is only a client of it, and the
+// service read its configuration when IT started, so the
+// OPENCODE_CONFIG_CONTENT set for that client never reaches it: the
+// runanywhere provider does not exist there and OpenCode answers with its own
+// default model (seen 2026-10-15 on 2.0.28 as "build · cat-jam-free").
+// `--standalone` gives the launch a private server of its own, started with
+// the launch's environment. OpenCode 1.x has no service and no such flag.
+const STANDALONE_FLAG: &str = "--standalone";
+// The OpenCode 2 commands that open a session and take `--standalone`
+// (`opencode <command> --help`, 2.0.28). Every other command (auth, mcp,
+// plugin, service, upgrade, ...) is passed through untouched.
+const SERVER_BACKED_COMMANDS: [&str; 8] = [
+    "run", "mini", "acp", "models", "session", "api", "debug", "stats",
+];
+const OTHER_COMMANDS: [&str; 10] = [
+    "upgrade",
+    "update",
+    "uninstall",
+    "auth",
+    "mcp",
+    "plugin",
+    "service",
+    "reload",
+    "pair",
+    "serve",
+];
+
+/// The major version in `opencode --version` output ("opencode v2.0.28",
+/// "1.18.34"), or None when there is none to read.
+pub fn open_code_major_version(output: &str) -> Option<u64> {
+    output.split_whitespace().find_map(|word| {
+        let digits = word.strip_prefix('v').unwrap_or(word);
+        let major = digits.split('.').next()?;
+        if digits.contains('.') && !major.is_empty() && major.bytes().all(|b| b.is_ascii_digit()) {
+            major.parse().ok()
+        } else {
+            None
+        }
+    })
+}
+
+/// The installed OpenCode's major version, or None when it cannot be read
+/// (not installed, or an output this does not recognise).
+pub fn installed_open_code_major_version() -> Option<u64> {
+    let names: &[&str] = if cfg!(windows) {
+        &["opencode.cmd", "opencode"]
+    } else {
+        &["opencode"]
+    };
+    names.iter().find_map(|name| {
+        let output = std::process::Command::new(name)
+            .arg("--version")
+            .output()
+            .ok()?;
+        open_code_major_version(&String::from_utf8_lossy(&output.stdout))
+    })
+}
+
+/// `arguments` with `--standalone` where OpenCode 2 needs it (see
+/// STANDALONE_FLAG): after a session command, or ahead of everything when
+/// the launch opens the interactive UI (no command, a flag, a directory or a
+/// prompt first). Unchanged for OpenCode 1 or an unknown version, for a
+/// command that is not a session's, and when the person already chose a
+/// server (`--standalone` or `--server`).
+pub fn with_private_server(arguments: &[String], major_version: Option<u64>) -> Vec<String> {
+    let chose_server = arguments
+        .iter()
+        .any(|arg| arg == STANDALONE_FLAG || arg == "--server" || arg.starts_with("--server="));
+    if major_version.unwrap_or(0) < 2 || chose_server {
+        return arguments.to_vec();
+    }
+    let first = arguments.first().map(String::as_str).unwrap_or("");
+    let mut out = arguments.to_vec();
+    if SERVER_BACKED_COMMANDS.contains(&first) {
+        out.insert(1, STANDALONE_FLAG.to_string());
+    } else if !OTHER_COMMANDS.contains(&first) {
+        out.insert(0, STANDALONE_FLAG.to_string());
+    }
+    out
+}
+
 fn set_environment(name: &str, value: &str) -> bool {
     if name.is_empty() || name.contains('=') || name.contains('\0') {
         return false;
@@ -356,7 +439,8 @@ pub fn launch_open_code_cloud_with(
 pub fn launch_open_code_cloud(model: &str, arguments: &[String]) -> i32 {
     let console = ConsoleClient::default();
     let spawn: SpawnFunction = std::sync::Arc::new(|tool: &str, args: &[String]| spawn(tool, args));
-    launch_open_code_cloud_with(model, arguments, &console, &spawn)
+    let arguments = with_private_server(arguments, installed_open_code_major_version());
+    launch_open_code_cloud_with(model, &arguments, &console, &spawn)
 }
 
 #[cfg(all(test, unix))]
