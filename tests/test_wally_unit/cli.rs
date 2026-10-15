@@ -58,6 +58,39 @@ fn passthrough_argv_split() {
                 "run",
             ]),
         },
+        // --context-window takes a value, in either form, and stays wally's.
+        Case {
+            input: v(&[
+                "wally",
+                "codex",
+                "-m",
+                "glm-5.3-flash",
+                "--context-window",
+                "50000",
+                "exec",
+            ]),
+            want: v(&[
+                "wally",
+                "codex",
+                "-m",
+                "glm-5.3-flash",
+                "--context-window",
+                "50000",
+                "--",
+                "exec",
+            ]),
+        },
+        Case {
+            input: v(&["wally", "claude-code", "--context-window=50000", "-p", "hi"]),
+            want: v(&[
+                "wally",
+                "claude-code",
+                "--context-window=50000",
+                "--",
+                "-p",
+                "hi",
+            ]),
+        },
         // An explicit -- is left exactly as the reader wrote it.
         Case {
             input: v(&["wally", "claude-code", "--", "-p", "hi"]),

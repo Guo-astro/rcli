@@ -1,11 +1,12 @@
 //! Networking: the control-plane wiring (SDK transport), the loopback token the
 //! coding-tool proxies hand their tools, and the upstream client + minimal
-//! HTTP/1.1 layer behind the Anthropic shim.
+//! HTTP/1.1 layer behind the loopback translators (`relay`).
 
 pub mod control_plane;
 pub mod decompress;
 pub mod http1;
 pub mod loopback_auth;
+pub mod relay;
 pub mod upstream_call;
 pub mod upstream_pool;
 

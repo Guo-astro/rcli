@@ -1,28 +1,26 @@
 //! The loopback shim server (port of src/anthropic/messages.cpp).
 
-use crate::account::cancel_worker::{Bearer, CancelResult, CancelWorker};
-use crate::account::console::CancelOutcome;
 use crate::account::model_cache::cached_model_ids;
 use crate::anthropic::translate;
-use crate::config::cli_paths::state_dir;
 use crate::harness::{
     harness_header_value, upstream_user_agent, DeclaredHarness, Endpoint, HARNESS_HEADER,
 };
 use crate::io::output::{error_line, status_line};
-use crate::net::http1::{
-    LivenessProbe, ResponseHead, ResponseWriter, Server, ServerHandle, ServerRequest,
+use crate::net::http1::{ResponseWriter, Server, ServerHandle, ServerRequest};
+use crate::net::loopback_auth::generate_loopback_token;
+use crate::net::relay::{
+    self, log_upstream_error, presents_token, split_base_url, PreStreamFailure, ReaderGoneProbe,
+    StreamEnd, StreamSink, Upstream,
 };
-use crate::net::loopback_auth::{constant_time_equals, generate_loopback_token};
-use crate::net::upstream_call::{self, WatchedCall, WatchedResult};
-use crate::net::upstream_pool::{retry_on_fresh_connection, UpstreamOptions, UpstreamPool};
+use crate::net::upstream_pool::{UpstreamOptions, UpstreamPool};
 use serde_json::{json, Value};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use std::net::TcpStream;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 pub type ModelAliases = Vec<(String, String)>;
 
@@ -45,111 +43,13 @@ impl std::fmt::Debug for Shim {
 }
 
 // ---------------------------------------------------------------------
-// shim.log
-// ---------------------------------------------------------------------
-
-/// Now, as `%Y-%m-%dT%H:%M:%SZ` (`util::format_utc`).
-fn utc_timestamp() -> String {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or(Duration::ZERO);
-    crate::util::format_utc(i64::try_from(now.as_secs()).unwrap_or(i64::MAX))
-}
-
-/// One timestamped line into shim.log; the error logger below and the
-/// abandon path share it. Never the editor's terminal, which the wrapped
-/// tool owns.
-fn shim_log(line: &str) {
-    let dir = state_dir();
-    if dir.is_empty() {
-        return;
-    }
-    let _ = std::fs::create_dir_all(&dir);
-    let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(format!("{dir}/shim.log"))
-    else {
-        return;
-    };
-    use std::io::Write;
-    let _ = writeln!(file, "{} {}", utc_timestamp(), line);
-}
-
-/// Appends one line about a failed upstream call to a log file, best effort.
-///
-/// A file, not stderr: the wrapped tool (Claude Code) owns the terminal, and
-/// a line printed into its TUI corrupts the display -- which is why a real
-/// error used to vanish into a blind "API error, retrying" with nowhere to
-/// look. The upstream response body is recorded; the bearer token never is
-/// (it is only ever on the request, never echoed here).
-fn log_upstream_error(model: &str, streaming: bool, status: i32, body: &[u8]) {
-    let dir = state_dir();
-    if dir.is_empty() {
-        return;
-    }
-    let _ = std::fs::create_dir_all(&dir);
-    let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(format!("{dir}/shim.log"))
-    else {
-        return;
-    };
-    use std::io::Write;
-    let cap = body.len().min(2000);
-    let mut snippet = body[..cap].to_vec();
-    for byte in snippet.iter_mut() {
-        if *byte == b'\n' || *byte == b'\r' {
-            *byte = b' ';
-        }
-    }
-    let snippet = String::from_utf8_lossy(&snippet);
-    let _ = writeln!(
-        file,
-        "{} model={} stream={} status={} body={}",
-        utc_timestamp(),
-        model,
-        if streaming { 1 } else { 0 },
-        status,
-        snippet
-    );
-}
-
-/// Split "http://host:port/v1" into the host root and the path prefix the
-/// HTTP layer wants separately.
-fn split_base_url(base_url: &str) -> Option<(String, String)> {
-    let scheme = if base_url.starts_with("https://") {
-        "https://"
-    } else {
-        "http://"
-    };
-    if !base_url.starts_with(scheme) {
-        return None;
-    }
-    let (origin, prefix) = match base_url[scheme.len()..].find('/') {
-        None => (base_url.to_string(), String::new()),
-        Some(idx) => {
-            let slash = scheme.len() + idx;
-            (base_url[..slash].to_string(), base_url[slash..].to_string())
-        }
-    };
-    if origin.is_empty() {
-        None
-    } else {
-        Some((origin, prefix))
-    }
-}
-
-// ---------------------------------------------------------------------
 // Runtime
 // ---------------------------------------------------------------------
 
 struct Runtime {
-    #[allow(dead_code)]
-    origin: String,
-    prefix: String,
-    api_key: String,
+    /// Where requests go, shared with the other translators: the pool, the
+    /// key, the harness headers and the abandon -> cancel path.
+    upstream: Upstream,
     model: String,
     advertised: String,
     /// The real model ids the console advertises (never the advertised
@@ -178,20 +78,6 @@ struct Runtime {
     /// local processes out.
     local_token: String,
     verbose: bool,
-    /// Upstream connections, kept open across requests (#80).
-    pool: Arc<UpstreamPool>,
-    /// Where a request the editor abandoned is cancelled by name (#81): the
-    /// session's control plane, or nothing for a local server. `stopping`
-    /// tells an in-flight watch to stop waiting for an id; the worker sends
-    /// the cancels off the request path, and stop_running_instance() drains
-    /// it.
-    #[allow(dead_code)]
-    console_url: String,
-    stopping: AtomicBool,
-    cancels: Option<CancelWorker>,
-    /// Sent on every upstream request: the harness this translator serves, in
-    /// `X-RA-Harness` and in the User-Agent. Fixed for the session.
-    upstream_headers: Vec<(String, String)>,
 }
 
 struct RunningInstance {
@@ -208,156 +94,6 @@ fn digest<T: Hash + ?Sized>(value: &T) -> u64 {
     hasher.finish()
 }
 
-// The tokens the wrapped tool presents, from either header Claude Code may
-// send one in: x-api-key: <t> (from ANTHROPIC_API_KEY, or a reader's
-// apiKeyHelper) and Authorization: Bearer <t> (from ANTHROPIC_AUTH_TOKEN).
-// Both can arrive at once, the helper's key beside wally's bearer token.
-fn presented_tokens(request: &ServerRequest) -> Vec<String> {
-    let mut tokens = Vec::new();
-    if let Some(value) = request.header("x-api-key") {
-        tokens.push(value.to_string());
-    }
-    if let Some(authorization) = request.header("Authorization") {
-        const BEARER: &str = "Bearer ";
-        if let Some(rest) = authorization.strip_prefix(BEARER) {
-            tokens.push(rest.to_string());
-        }
-    }
-    tokens
-}
-
-/// The request carries this session's token in either header. Each is
-/// compared in constant time; a reader's own key in x-api-key (an
-/// apiKeyHelper in their settings) beside wally's bearer token is not a
-/// refusal.
-fn presents_token(request: &ServerRequest, token: &str) -> bool {
-    presented_tokens(request)
-        .iter()
-        .any(|presented| constant_time_equals(presented, token))
-}
-
-/// What the abandon path does once the id is known (or known to be
-/// unknowable): a shim.log line the person can find, and the cancel itself
-/// through the worker -- never on this thread, which is the upstream watch
-/// or the response handler.
-fn on_abandoned(
-    runtime: &Runtime,
-    streaming: bool,
-    request_id: &str,
-    status: i32,
-    during_prefill: bool,
-) {
-    let line = format!(
-        "abandoned during={} id={} status={} stream={}",
-        if during_prefill { "prefill" } else { "stream" },
-        if request_id.is_empty() {
-            "unknown"
-        } else {
-            request_id
-        },
-        status,
-        if streaming { "1" } else { "0" }
-    );
-    if request_id.is_empty() {
-        shim_log(&format!("{line} cancel=none(no-id)"));
-        return;
-    }
-    let Some(cancels) = runtime.cancels.as_ref() else {
-        // No worker: a local server, which has no console to tell.
-        shim_log(&format!("{line} cancel=skipped(local)"));
-        return;
-    };
-    shim_log(&format!("{line} cancel=queued"));
-    cancels.enqueue(request_id);
-}
-
-/// Sends `body` upstream on a pooled connection (#80), watching the editor
-/// the whole time (#81), and once more on a fresh connection if the first
-/// went out on a stale keep-alive (see `retry_on_fresh_connection`) -- never
-/// after the editor left: the stop that ended an abandoned call looks
-/// exactly like a stale connection to that rule, and re-sending the prompt
-/// for a reader that is gone is the waste this exists to end. `on_headers`,
-/// when set, receives the upstream response headers before any body byte, so
-/// a streaming caller can preserve a pre-stream failure status instead of a
-/// blind 200 (#83).
-#[allow(clippy::type_complexity)]
-fn post_upstream(
-    runtime: &Runtime,
-    streaming: bool,
-    path: &str,
-    body: &[u8],
-    mut receiver: Option<&mut dyn FnMut(&[u8]) -> bool>,
-    reader_gone: &(dyn Fn() -> bool + Sync),
-    mut on_headers: Option<&mut dyn FnMut(&ResponseHead)>,
-) -> WatchedResult {
-    for attempt in 0..2 {
-        let mut lease = runtime.pool.acquire(&runtime.api_key);
-        if runtime.verbose {
-            status_line(&format!(
-                "anthropic: upstream connection {}",
-                if lease.reused() { "reused" } else { "fresh" }
-            ));
-        }
-
-        let receiver_box: Option<Box<dyn FnMut(&[u8]) -> bool + '_>> = receiver
-            .as_mut()
-            .map(|r| Box::new(&mut **r) as Box<dyn FnMut(&[u8]) -> bool + '_>);
-        let on_headers_box: Option<Box<dyn FnMut(&ResponseHead) + '_>> = on_headers
-            .as_mut()
-            .map(|r| Box::new(&mut **r) as Box<dyn FnMut(&ResponseHead) + '_>);
-
-        let call = WatchedCall {
-            path: path.to_string(),
-            body: body.to_vec(),
-            content_type: "application/json".to_string(),
-            headers: runtime.upstream_headers.clone(),
-            receiver: receiver_box,
-            reader_gone: Some(Box::new(reader_gone) as Box<dyn Fn() -> bool + Sync + '_>),
-            on_headers: on_headers_box,
-            stopping: Some(Box::new(|| runtime.stopping.load(Ordering::SeqCst))
-                as Box<dyn Fn() -> bool + Sync + '_>),
-            on_abandoned: Some(Box::new(
-                move |id: &str, status: i32, during_prefill: bool| {
-                    on_abandoned(runtime, streaming, id, status, during_prefill);
-                },
-            )),
-            ..Default::default()
-        };
-
-        let result = upstream_call::post_watched(&mut lease, call);
-        if result.reply.is_ok() {
-            // A complete reply, whatever its status, leaves the connection
-            // clean; the lease goes back to the pool when it is destroyed.
-            return result;
-        }
-        // No reply: the socket is in no state to reuse.
-        lease.discard();
-        if result.abandoned {
-            if runtime.verbose {
-                status_line("anthropic: the editor left; upstream request dropped");
-            }
-            return result;
-        }
-        let should_retry = attempt == 0
-            && match &result.reply {
-                Err(error) => {
-                    retry_on_fresh_connection(*error, false, result.received_any, lease.reused())
-                }
-                Ok(_) => false,
-            };
-        if should_retry {
-            if runtime.verbose {
-                status_line(
-                    "anthropic: upstream connection was stale; retrying once on a fresh one",
-                );
-            }
-            continue;
-        }
-        return result;
-    }
-    unreachable!("post_upstream always returns within its 2 attempts")
-}
-
 /// The model a request runs against: the one the client asked for when the
 /// console advertises it, otherwise the launched default. Claude Code maps
 /// its Anthropic-family picker onto catalog models, so a request can name
@@ -365,6 +101,9 @@ fn post_upstream(
 /// instead of collapsing onto one.
 fn effective_model(runtime: &Runtime, request: &Value) -> String {
     if let Some(requested) = request.get("model").and_then(Value::as_str) {
+        // Claude Desktop asks for a profile entry's 1M variant as
+        // `<name>[1m]`: the same model, with the larger window.
+        let requested = strip_one_million_suffix(requested);
         if runtime.catalog.iter().any(|m| m == requested) {
             return requested.to_string();
         }
@@ -377,20 +116,12 @@ fn effective_model(runtime: &Runtime, request: &Value) -> String {
     runtime.model.clone()
 }
 
-/// A `LivenessProbe` that treats "could not make one" as "the reader is
-/// still there", so a failed clone never abandons a live request.
-struct ReaderGoneProbe(Option<LivenessProbe>);
-
-impl ReaderGoneProbe {
-    fn new(stream: &TcpStream) -> Self {
-        ReaderGoneProbe(LivenessProbe::new(stream).ok())
-    }
-
-    fn is_gone(&self) -> bool {
-        self.0
-            .as_ref()
-            .map(|probe| probe.is_gone())
-            .unwrap_or(false)
+/// `requested` without a trailing `[1m]`, in any casing.
+fn strip_one_million_suffix(requested: &str) -> &str {
+    let cut = requested.len().saturating_sub(4);
+    match requested.get(cut..) {
+        Some(tail) if tail.eq_ignore_ascii_case("[1m]") => &requested[..cut],
+        _ => requested,
     }
 }
 
@@ -410,14 +141,13 @@ fn handle_non_streaming(
     // error still surfaces. The CLI path keeps the forward-once contract, so
     // the editor sees the Retry-After and backs off.
     let attempts = if runtime.aliases.is_empty() { 1 } else { 4 };
-    let path = format!("{}/chat/completions", runtime.prefix);
+    let path = format!("{}/chat/completions", runtime.upstream.prefix);
     let probe = ReaderGoneProbe::new(stream);
     let reader_gone = || probe.is_gone();
 
     let mut attempt = 0;
     let result = loop {
-        let r = post_upstream(
-            runtime,
+        let r = runtime.upstream.post(
             false,
             &path,
             upstream_body.as_bytes(),
@@ -551,198 +281,120 @@ fn handle_non_streaming(
 // Streaming
 // ---------------------------------------------------------------------
 
-/// Carries an upstream stream from the worker thread that runs the upstream
-/// call to the loop that writes SSE frames to the editor.
-///
-/// A worker is needed because the upstream status is only known once its
-/// headers arrive, and the pre-stream decision (commit a 200 event-stream,
-/// or answer a 429/503 as a normal reply, #83) has to be made before any
-/// event is written. The worker peeks the headers and hands whole transport
-/// chunks across a single slot, which bounds read-ahead and keeps
-/// backpressure on a long stream.
-struct StreamPipeShared {
-    headers_ready: bool,
-    finished: bool,
-    stopped: bool,
-    successful: bool,
-    abandoned: bool,
-    status: i32,
-    retry_after: String,
-    chunk: Vec<u8>,
-    error_body: Vec<u8>,
+/// Anthropic's side of `relay::relay_stream`: each OpenAI chunk becomes
+/// Anthropic SSE events, and the close is Anthropic's message_delta /
+/// message_stop or a single `event: error`.
+struct AnthropicStream<'a> {
+    effective: &'a str,
+    state: translate::StreamState,
+    saw_done: bool,
 }
 
-/// A local model can spend longer than an editor's idle timeout in prefill, so
-/// `read` must not block indefinitely on the first transport chunk: it wakes
-/// every second to let the caller send a harmless SSE keepalive comment while
-/// it waits, instead of the editor reporting a network failure and retrying.
-enum StreamReadResult {
-    Chunk(Vec<u8>),
-    KeepAlive,
-    Finished,
-}
-
-struct StreamPipe {
-    shared: Mutex<StreamPipeShared>,
-    changed: Condvar,
-}
-
-impl StreamPipe {
-    fn new() -> Self {
-        StreamPipe {
-            shared: Mutex::new(StreamPipeShared {
-                headers_ready: false,
-                finished: false,
-                stopped: false,
-                successful: false,
-                abandoned: false,
-                status: 0,
-                retry_after: String::new(),
-                chunk: Vec::new(),
-                error_body: Vec::new(),
-            }),
-            changed: Condvar::new(),
+impl StreamSink for AnthropicStream<'_> {
+    fn pre_stream_failure(&mut self, writer: &mut ResponseWriter<'_>, failure: PreStreamFailure) {
+        if failure.abandoned {
+            // Same generic error_handler_ body as the non-streaming abandoned
+            // path above -- see the comment there.
+            write_translator_error(writer, 499, "POST", "/v1/messages");
+            return;
         }
-    }
-
-    /// The shared state, taking a poisoned lock's inner value rather than
-    /// panicking. A poison means a worker or route thread unwound mid-write, but
-    /// the flags and chunk buffer are still coherent to read and set, and the
-    /// drop guards below run *during* an unwind: a panic there would abort the
-    /// whole process and drop every in-flight connection. Clearing the poison
-    /// keeps the later condvar waits (which `.unwrap()` their lock result) from
-    /// re-panicking on the same poison this already recovered from.
-    fn lock(&self) -> std::sync::MutexGuard<'_, StreamPipeShared> {
-        match self.shared.lock() {
-            Ok(guard) => guard,
-            Err(poison) => {
-                self.shared.clear_poison();
-                poison.into_inner()
+        // Same raw-vs-client status split as the non-streaming path
+        // (`pipe->status` feeds the log and translator; `response.status` is
+        // `pipe->status ? pipe->status : 502`).
+        log_upstream_error(self.effective, true, failure.raw_status, &failure.body);
+        match translate::upstream_failure(
+            failure.raw_status,
+            &String::from_utf8_lossy(&failure.body),
+        ) {
+            translate::UpstreamFailureBody::Translated(kind, message) => {
+                let payload = translate::error_body(&kind, &message);
+                let mut headers: Vec<(&str, &str)> = vec![("Content-Type", "application/json")];
+                if !failure.retry_after.is_empty() {
+                    headers.push(("Retry-After", &failure.retry_after));
+                }
+                let _ = writer.send_full(failure.client_status, &headers, payload.as_bytes());
+            }
+            translate::UpstreamFailureBody::MalformedUtf8Truncation(diagnostic) => {
+                // Same cascade as the non-streaming path: this still runs
+                // before any bytes of the response have gone out (the C++
+                // side has not yet registered its chunked content provider,
+                // so the equivalent throw is still inside the handler's own
+                // try/catch), so `throw` here reaches the same `catch_unwind`
+                // the non-streaming path does.
+                throw(diagnostic);
             }
         }
     }
 
-    /// Blocks for the next transport chunk, waking every second to report a
-    /// keepalive instead of the stream's first token, and `Finished` once the
-    /// stream has ended with nothing left to hand over.
-    fn read(&self) -> StreamReadResult {
-        let guard = self.lock();
-        let (mut guard, _timeout) = self
-            .changed
-            .wait_timeout_while(guard, Duration::from_secs(1), |shared| {
-                shared.chunk.is_empty() && !shared.finished
-            })
-            .unwrap();
-        if guard.chunk.is_empty() && !guard.finished {
-            return StreamReadResult::KeepAlive;
-        }
-        if guard.chunk.is_empty() {
-            return StreamReadResult::Finished;
-        }
-        let next = std::mem::take(&mut guard.chunk);
-        self.changed.notify_all();
-        StreamReadResult::Chunk(next)
-    }
-}
-
-/// Ends the pipe from the route-handling side no matter how
-/// `handle_streaming` returns -- normal completion, an early return because
-/// the reader is gone, or a panic -- so a worker still blocked in its
-/// backpressure wait (nobody left calling `StreamPipe::read`) is told to
-/// give up instead of hanging.
-struct StopPipeOnDrop<'a>(&'a StreamPipe);
-
-impl Drop for StopPipeOnDrop<'_> {
-    fn drop(&mut self) {
-        let mut guard = self.0.lock();
-        guard.stopped = true;
-        self.0.changed.notify_all();
-    }
-}
-
-/// Ends the pipe from the worker side no matter how the worker's body
-/// returns, including a panic mid-call: without this, a panic would unwind
-/// past the point that sets `finished`, leaving the route-handling thread's
-/// `StreamPipe::read` (and the pre-stream headers-or-finished wait) blocked
-/// forever.
-struct FinishPipeOnDrop<'a>(&'a StreamPipe);
-
-impl Drop for FinishPipeOnDrop<'_> {
-    fn drop(&mut self) {
-        let mut guard = self.0.lock();
-        guard.finished = true;
-        self.0.changed.notify_all();
-    }
-}
-
-/// Feeds one transport chunk into the SSE line parser, translating each
-/// complete event into Anthropic's shape and writing it to `writer`.
-/// Consumes complete lines across arbitrary transport chunks: CRLF and
-/// multi-line data fields are valid SSE too. Returns false once `writer`
-/// reports the reader is gone, mirroring the C++ `receive` lambda's
-/// `return false` -- the caller's read loop must stop pulling more chunks.
-fn feed_sse_bytes(
-    data: &[u8],
-    pending: &mut Vec<u8>,
-    payload: &mut Vec<u8>,
-    has_data: &mut bool,
-    saw_done: &mut bool,
-    state: &mut translate::StreamState,
-    writer: &mut ResponseWriter<'_>,
-) -> bool {
-    pending.extend_from_slice(data);
-    while let Some(split) = pending.iter().position(|&b| b == b'\n') {
-        let mut line: Vec<u8> = pending.drain(..=split).collect();
-        line.pop(); // drop the '\n' itself
-        if line.last() == Some(&b'\r') {
-            line.pop();
-        }
-        if !line.is_empty() {
-            if line.as_slice() == b"data" || line.starts_with(b"data:") {
-                let mut value = if line.as_slice() == b"data" {
-                    Vec::new()
-                } else {
-                    line[5..].to_vec()
-                };
-                if value.first() == Some(&b' ') {
-                    value.remove(0);
-                }
-                if *has_data {
-                    payload.push(b'\n');
-                }
-                // Raw bytes, exactly as C++'s `std::string payload` -- never
-                // lossily repaired. Invalid UTF-8 must fail the same way it
-                // fails nlohmann's `Json::parse` below, not get silently
-                // replaced with U+FFFD before parsing ever sees it.
-                payload.extend_from_slice(&value);
-                *has_data = true;
-            }
-            continue;
-        }
-        if !*has_data {
-            continue; // comments/keepalives
-        }
-        *has_data = false;
-        let events = if *saw_done {
-            translate::stream_error_to_anthropic(state, "the model endpoint sent data after [DONE]")
-        } else if payload.as_slice() == b"[DONE]" {
-            *saw_done = true;
+    fn on_payload(&mut self, payload: &[u8]) -> String {
+        if self.saw_done {
+            translate::stream_error_to_anthropic(
+                &mut self.state,
+                "the model endpoint sent data after [DONE]",
+            )
+        } else if payload == b"[DONE]" {
+            self.saw_done = true;
             String::new()
         } else {
             match serde_json::from_slice::<Value>(payload) {
-                Ok(parsed) => translate::stream_chunk_to_anthropic(&parsed, state),
+                Ok(parsed) => translate::stream_chunk_to_anthropic(&parsed, &mut self.state),
                 Err(_) => translate::stream_error_to_anthropic(
-                    state,
+                    &mut self.state,
                     "the model endpoint sent a malformed stream frame",
                 ),
             }
-        };
-        payload.clear();
-        if !events.is_empty() && writer.write_chunk(events.as_bytes()).is_err() {
-            return false;
         }
     }
-    true
+
+    fn on_end(&mut self, end: StreamEnd) -> String {
+        match end {
+            StreamEnd::Failed { error_body } => {
+                // Unlike the two pre-stream sites, C++ hardcodes `status = 0`
+                // here too -- there is no raw-vs-client split to restore.
+                let status = 0;
+                log_upstream_error(self.effective, true, status, &error_body);
+                let message = match translate::upstream_failure(
+                    status,
+                    &String::from_utf8_lossy(&error_body),
+                ) {
+                    translate::UpstreamFailureBody::Translated(_kind, message) => message,
+                    translate::UpstreamFailureBody::MalformedUtf8Truncation(_) => {
+                        // Unlike the two pre-stream sites, panicking here must
+                        // NOT happen even though `handle_messages_route`'s
+                        // `catch_unwind` would technically catch it: the
+                        // writer has already sent a 200 status line and
+                        // `Transfer-Encoding: chunked` (and possibly earlier
+                        // chunks), and `ResponseWriter::send_full` has no
+                        // notion of "already responded" -- it would write a
+                        // second, invalid status line into the middle of the
+                        // chunked body, corrupting the connection. C++'s
+                        // equivalent throw happens inside the chunked
+                        // content-provider callback, outside every catch, so
+                        // it is std::terminate -- also not something to
+                        // reproduce. A deliberate, narrow deviation: close the
+                        // SSE stream with a fixed, always-valid-UTF-8 message
+                        // instead of crashing or corrupting the wire.
+                        "the model endpoint's error response could not be decoded".to_string()
+                    }
+                };
+                translate::stream_error_to_anthropic(&mut self.state, &message)
+            }
+            StreamEnd::Ended { incomplete_tail } => {
+                // Transport EOF is not inference completion. Our OpenAI
+                // upstream must send a finish reason followed by [DONE];
+                // anything else is an incomplete stream and must not read as
+                // a clean turn (#84).
+                if !self.saw_done || incomplete_tail {
+                    translate::stream_error_to_anthropic(
+                        &mut self.state,
+                        "the model endpoint ended an incomplete stream before [DONE]",
+                    )
+                } else {
+                    translate::stream_close_to_anthropic(&mut self.state)
+                }
+            }
+        }
+    }
 }
 
 fn handle_streaming(
@@ -753,231 +405,25 @@ fn handle_streaming(
 ) {
     let effective = effective_model(runtime, request);
     let upstream_body = translate::request_to_openai(request, &effective).to_string();
-    let path = format!("{}/chat/completions", runtime.prefix);
+    let path = format!("{}/chat/completions", runtime.upstream.prefix);
+    let mut state = translate::StreamState::new();
+    state.model = effective.clone();
     // Computed once, up front: message_start's usage estimate is built from
-    // the request and must be ready before the first upstream chunk
-    // arrives.
-    let input_estimate = translate::estimate_request_tokens(request);
-    let probe = ReaderGoneProbe::new(stream);
-    let pipe = StreamPipe::new();
-
-    std::thread::scope(|scope| {
-        let _stop_on_drop = StopPipeOnDrop(&pipe);
-
-        scope.spawn(|| {
-            let _finish_on_drop = FinishPipeOnDrop(&pipe);
-            let reader_gone = || probe.is_gone();
-            let mut receiver = |data: &[u8]| -> bool {
-                let mut guard = pipe.lock();
-                if guard.status < 200 || guard.status >= 300 {
-                    // A non-2xx body is the error body, kept bounded so a
-                    // real (2xx) stream of any size costs only these few
-                    // KB.
-                    const CAP: usize = 8192;
-                    if guard.error_body.len() < CAP {
-                        let room = CAP - guard.error_body.len();
-                        let take = data.len().min(room);
-                        guard.error_body.extend_from_slice(&data[..take]);
-                    }
-                    return !guard.stopped;
-                }
-                // Backpressure: hold the next transport chunk until the
-                // reading side has taken the last one.
-                loop {
-                    if guard.chunk.is_empty() || guard.stopped {
-                        break;
-                    }
-                    guard = pipe.changed.wait(guard).unwrap();
-                }
-                if guard.stopped {
-                    return false;
-                }
-                guard.chunk = data.to_vec();
-                pipe.changed.notify_all();
-                true
-            };
-            let mut on_headers = |head: &ResponseHead| {
-                let mut guard = pipe.lock();
-                guard.status = head.status;
-                guard.retry_after = head.header("Retry-After").unwrap_or("").to_string();
-                guard.headers_ready = true;
-                pipe.changed.notify_all();
-            };
-
-            let result = post_upstream(
-                runtime,
-                true,
-                &path,
-                upstream_body.as_bytes(),
-                Some(&mut receiver),
-                &reader_gone,
-                Some(&mut on_headers),
-            );
-            let mut guard = pipe.lock();
-            guard.successful = matches!(&result.reply, Ok(r) if r.status >= 200 && r.status < 300);
-            guard.abandoned = result.abandoned;
-            // `_finish_on_drop`, dropped when this closure returns (however
-            // it returns), sets `finished` and notifies.
-        });
-
-        // Pre-stream decision (#83): known before any event is written, so
-        // it can be answered as a normal reply that keeps the status and
-        // any Retry-After, rather than a 200 stream carrying an error.
-        let mut guard = pipe.lock();
-        loop {
-            if guard.headers_ready || guard.finished {
-                break;
-            }
-            guard = pipe.changed.wait(guard).unwrap();
-        }
-        if guard.status < 200 || guard.status >= 300 {
-            loop {
-                if guard.finished {
-                    break;
-                }
-                guard = pipe.changed.wait(guard).unwrap();
-            }
-            if guard.abandoned {
-                drop(guard);
-                // Same generic error_handler_ body as the non-streaming
-                // abandoned path above -- see the comment there.
-                write_translator_error(writer, 499, "POST", "/v1/messages");
-                return;
-            }
-            // Same raw-vs-client status split as the non-streaming path
-            // (`pipe->status` feeds the log and translator; `response.status`
-            // is `pipe->status ? pipe->status : 502`).
-            let raw_status = guard.status;
-            let client_status = if guard.status != 0 { guard.status } else { 502 };
-            let retry_after = guard.retry_after.clone();
-            let error_body = guard.error_body.clone();
-            drop(guard);
-            log_upstream_error(&effective, true, raw_status, &error_body);
-            match translate::upstream_failure(raw_status, &String::from_utf8_lossy(&error_body)) {
-                translate::UpstreamFailureBody::Translated(kind, message) => {
-                    let payload = translate::error_body(&kind, &message);
-                    let mut headers: Vec<(&str, &str)> = vec![("Content-Type", "application/json")];
-                    if !retry_after.is_empty() {
-                        headers.push(("Retry-After", &retry_after));
-                    }
-                    let _ = writer.send_full(client_status, &headers, payload.as_bytes());
-                }
-                translate::UpstreamFailureBody::MalformedUtf8Truncation(diagnostic) => {
-                    // Same cascade as the non-streaming path: this still runs
-                    // before any bytes of the response have gone out (the
-                    // C++ side has not yet registered its chunked content
-                    // provider, so the equivalent throw is still inside the
-                    // handler's own try/catch), so `throw` here reaches the
-                    // same `catch_unwind` the non-streaming path does.
-                    throw(diagnostic);
-                }
-            }
-            return;
-        }
-        drop(guard);
-
-        if writer
-            .begin_chunked(200, &[("Content-Type", "text/event-stream")])
-            .is_err()
-        {
-            return;
-        }
-        let mut state = translate::StreamState::new();
-        state.model = effective.clone();
-        state.input_estimate = input_estimate;
-        let mut pending: Vec<u8> = Vec::new();
-        let mut payload: Vec<u8> = Vec::new();
-        let mut has_data = false;
-        let mut saw_done = false;
-
-        loop {
-            let bytes = match pipe.read() {
-                StreamReadResult::Finished => break,
-                StreamReadResult::KeepAlive => {
-                    if writer.write_chunk(b": keepalive\n\n").is_err() {
-                        return;
-                    }
-                    continue;
-                }
-                StreamReadResult::Chunk(bytes) => bytes,
-            };
-            if !feed_sse_bytes(
-                &bytes,
-                &mut pending,
-                &mut payload,
-                &mut has_data,
-                &mut saw_done,
-                &mut state,
-                writer,
-            ) {
-                return;
-            }
-        }
-
-        let (abandoned, successful, error_body) = {
-            let guard = pipe.lock();
-            (guard.abandoned, guard.successful, guard.error_body.clone())
-        };
-        if abandoned {
-            // The editor is gone; the cancel is on its way (or was named as
-            // impossible). Nothing written here reaches anyone.
-            let _ = writer.end_chunked();
-            return;
-        }
-        if !successful {
-            // Unlike the two pre-stream sites, C++ hardcodes `status = 0`
-            // here too -- there is no raw-vs-client split to restore.
-            let status = 0;
-            log_upstream_error(&effective, true, status, &error_body);
-            let message =
-                match translate::upstream_failure(status, &String::from_utf8_lossy(&error_body)) {
-                    translate::UpstreamFailureBody::Translated(_kind, message) => message,
-                    translate::UpstreamFailureBody::MalformedUtf8Truncation(_) => {
-                        // Unlike the two pre-stream sites, panicking here
-                        // must NOT happen even though `handle_messages_route`'s
-                        // `catch_unwind` would technically catch it: `writer`
-                        // has already sent a 200 status line and
-                        // `Transfer-Encoding: chunked` (and possibly earlier
-                        // chunks), and `ResponseWriter::send_full` has no
-                        // notion of "already responded" -- it would write a
-                        // second, invalid status line into the middle of the
-                        // chunked body, corrupting the connection. C++'s
-                        // equivalent throw happens inside the chunked
-                        // content-provider callback, which runs *outside*
-                        // routing()'s try/catch and outside any other catch up
-                        // to the connection's worker thread, so it is an
-                        // uncaught exception -> std::terminate, crashing the
-                        // whole process -- also not something to reproduce, as
-                        // it would take every other in-flight connection down
-                        // too. This is a deliberate, narrow deviation: close
-                        // the SSE stream with a fixed, always-valid-UTF-8
-                        // message instead of crashing or corrupting the wire.
-                        "the model endpoint's error response could not be decoded".to_string()
-                    }
-                };
-            let body = translate::stream_error_to_anthropic(&mut state, &message);
-            if !body.is_empty() {
-                let _ = writer.write_chunk(body.as_bytes());
-            }
-            let _ = writer.end_chunked();
-            return;
-        }
-        // Transport EOF is not inference completion. Our OpenAI upstream
-        // must send a finish reason followed by [DONE]; anything else is an
-        // incomplete stream and must not read as a clean turn (#84).
-        let closing = if !saw_done || has_data || !pending.is_empty() {
-            translate::stream_error_to_anthropic(
-                &mut state,
-                "the model endpoint ended an incomplete stream before [DONE]",
-            )
-        } else {
-            translate::stream_close_to_anthropic(&mut state)
-        };
-        if !closing.is_empty() {
-            let _ = writer.write_chunk(closing.as_bytes());
-        }
-        let _ = writer.end_chunked();
-    });
+    // the request and must be ready before the first upstream chunk arrives.
+    state.input_estimate = translate::estimate_request_tokens(request);
+    let mut sink = AnthropicStream {
+        effective: &effective,
+        state,
+        saw_done: false,
+    };
+    relay::relay_stream(
+        &runtime.upstream,
+        stream,
+        &path,
+        upstream_body.as_bytes(),
+        writer,
+        &mut sink,
+    );
 }
 
 /// Stands in for a C++ `throw` that the request handler's own try/catch
@@ -1073,7 +519,8 @@ fn handle_messages_route(
     // Any other model is sent the images: the gateway judges them, and an
     // image whose source cannot be sent is refused here.
     let effective = effective_model(runtime, &parsed);
-    let text_only = runtime.api_key.is_empty() || runtime.text_only_models.contains(&effective);
+    let text_only =
+        runtime.upstream.api_key.is_empty() || runtime.text_only_models.contains(&effective);
     let problem = if text_only {
         let pasted: Vec<u64> = translate::pasted_images(&parsed)
             .iter()
@@ -1288,14 +735,9 @@ fn stop_running_instance() {
     else {
         return;
     };
-    runtime.stopping.store(true, Ordering::SeqCst);
+    runtime.upstream.begin_stopping();
     handle.stop();
-    if let Some(cancels) = runtime.cancels.as_ref() {
-        if cancels.pending() > 0 {
-            status_line("telling the model endpoint to stop the abandoned request");
-        }
-        let _ = cancels.stop();
-    }
+    runtime.upstream.drain_cancels();
 }
 
 /// Start the shim in front of `upstream`, serving `model`, declaring
@@ -1330,44 +772,26 @@ pub fn start(
 
     let local_token = generate_loopback_token();
     let pool = UpstreamPool::new(UpstreamOptions {
-        origin: origin.clone(),
+        origin,
         ..Default::default()
     });
-    let console_url = upstream.console_url.clone();
-    let api_key = upstream.api_key.clone();
-    let cancels = if !console_url.is_empty() && !api_key.is_empty() {
-        // Three seconds per cancel: fire-and-forget, and the bound on how
-        // long an exiting wrapper waits for the last one to go out.
-        let bearer_value = api_key.clone(); // fixed for the session
-        let bearer: Bearer = Arc::new(move || bearer_value.clone());
-        let on_result: CancelResult = Arc::new(|id: &str, outcome: CancelOutcome, error: &str| {
-            let word = match outcome {
-                CancelOutcome::Cancelled => "202",
-                CancelOutcome::NotFound => "404",
-                CancelOutcome::Failed => "failed",
-            };
-            let suffix = if error.is_empty() {
-                String::new()
-            } else {
-                format!(" error={error}")
-            };
-            shim_log(&format!("cancel id={id} result={word}{suffix}"));
-        });
-        Some(CancelWorker::new(
-            &console_url,
-            bearer,
-            3000,
-            on_result,
-            None,
-        ))
-    } else {
-        None
-    };
-
     let runtime = Arc::new(Runtime {
-        origin,
-        prefix,
-        api_key,
+        upstream: Upstream {
+            prefix,
+            api_key: upstream.api_key.clone(),
+            pool,
+            verbose,
+            log_tag: "anthropic",
+            stopping: AtomicBool::new(false),
+            cancels: relay::cancel_worker(&upstream.console_url, &upstream.api_key),
+            headers: vec![
+                (
+                    HARNESS_HEADER.to_string(),
+                    harness_header_value(declared).to_string(),
+                ),
+                ("User-Agent".to_string(), upstream_user_agent(declared)),
+            ],
+        },
         model: model.to_string(),
         advertised: if advertised.is_empty() {
             model.to_string()
@@ -1382,17 +806,6 @@ pub fn start(
         aliases: aliases.clone(),
         local_token: local_token.clone(),
         verbose,
-        pool,
-        console_url,
-        stopping: AtomicBool::new(false),
-        cancels,
-        upstream_headers: vec![
-            (
-                HARNESS_HEADER.to_string(),
-                harness_header_value(declared).to_string(),
-            ),
-            ("User-Agent".to_string(), upstream_user_agent(declared)),
-        ],
     });
 
     let mut server = Server::new();
@@ -1432,80 +845,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn split_base_url_separates_origin_and_prefix() {
+    fn a_1m_variant_names_the_same_model() {
         assert_eq!(
-            split_base_url("http://127.0.0.1:8080/v1"),
-            Some(("http://127.0.0.1:8080".to_string(), "/v1".to_string()))
+            strip_one_million_suffix("claude-sonnet-4-5[1m]"),
+            "claude-sonnet-4-5"
         );
         assert_eq!(
-            split_base_url("https://api.example.test"),
-            Some(("https://api.example.test".to_string(), String::new()))
+            strip_one_million_suffix("claude-sonnet-4-5[1M]"),
+            "claude-sonnet-4-5"
         );
-        assert_eq!(
-            split_base_url("https://api.example.test/api-dev"),
-            Some((
-                "https://api.example.test".to_string(),
-                "/api-dev".to_string()
-            ))
-        );
-        assert_eq!(split_base_url("not-a-url"), None);
-        assert_eq!(split_base_url(""), None);
-    }
-
-    #[test]
-    fn utc_timestamp_has_the_expected_shape() {
-        let stamp = utc_timestamp();
-        assert_eq!(stamp.len(), 20, "{stamp}");
-        assert!(stamp.ends_with('Z'), "{stamp}");
-        assert_eq!(stamp.as_bytes()[4], b'-');
-        assert_eq!(stamp.as_bytes()[10], b'T');
-    }
-
-    fn request_with_header(name: &str, value: &str) -> crate::net::http1::ServerRequest {
-        crate::net::http1::ServerRequest {
-            method: "POST".to_string(),
-            path: "/v1/messages".to_string(),
-            query: String::new(),
-            headers: vec![(name.to_string(), value.to_string())],
-            body: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn presented_tokens_read_x_api_key() {
-        let request = request_with_header("x-api-key", "secret");
-        assert_eq!(presented_tokens(&request), ["secret"]);
-    }
-
-    #[test]
-    fn presented_tokens_read_bearer_authorization() {
-        let request = request_with_header("Authorization", "Bearer secret");
-        assert_eq!(presented_tokens(&request), ["secret"]);
-    }
-
-    #[test]
-    fn presented_tokens_are_empty_without_a_recognized_header() {
-        let request = request_with_header("X-Other", "value");
-        assert!(presented_tokens(&request).is_empty());
-    }
-
-    /// A reader's apiKeyHelper sends its key in x-api-key beside wally's
-    /// bearer token: the request is still this session's (it got a 401 under a
-    /// settings.json with a helper). Neither alone of a wrong token passes.
-    #[test]
-    fn either_header_may_carry_the_token() {
-        let mut both = request_with_header("x-api-key", "their-helper-key");
-        both.headers
-            .push(("Authorization".to_string(), "Bearer secret".to_string()));
-        assert!(presents_token(&both, "secret"));
-        assert!(!presents_token(
-            &request_with_header("x-api-key", "their-helper-key"),
-            "secret"
-        ));
-        assert!(!presents_token(
-            &request_with_header("Authorization", "Bearer wrong"),
-            "secret"
-        ));
+        assert_eq!(strip_one_million_suffix("glm-5.3-flash"), "glm-5.3-flash");
+        assert_eq!(strip_one_million_suffix("[1m]"), "");
+        assert_eq!(strip_one_million_suffix("1m"), "1m");
     }
 
     #[test]

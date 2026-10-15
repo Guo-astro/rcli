@@ -93,13 +93,13 @@ fn bundle_path(editor: &Editor) -> String {
 }
 
 /// Sets `name` for the child, remembering what was there so it can be undone.
-struct ScopedEnv {
+pub(crate) struct ScopedEnv {
     name: String,
     previous: Option<String>,
 }
 
 impl ScopedEnv {
-    fn new(name: &str, value: &str) -> Self {
+    pub(crate) fn new(name: &str, value: &str) -> Self {
         let previous = std::env::var(name).ok();
         std::env::set_var(name, value);
         ScopedEnv {
@@ -178,7 +178,7 @@ const RUNTIME_ENTRIES: &[&str] = &[
 /// Recursive copy, overwriting an existing destination — `std::filesystem::copy`
 /// with `recursive | overwrite_existing`, discarding errors the way the C++
 /// `std::error_code` overload does.
-fn copy_recursive_overwrite(src: &Path, dst: &Path) {
+pub(crate) fn copy_recursive_overwrite(src: &Path, dst: &Path) {
     if src.is_dir() {
         let _ = fs::create_dir_all(dst);
         let Ok(entries) = fs::read_dir(src) else {
@@ -329,7 +329,7 @@ fn prepare_claude_config_dir() -> Option<String> {
 /// launch. Fed to Claude Code as CLAUDE_CODE_MAX_CONTEXT_TOKENS, this is what
 /// makes its auto-compaction fire at the model's real limit instead of a guessed
 /// default (which overruns qwen/gemma's 256k and wastes glm's 1M).
-fn cloud_context_window(model: &str) -> i64 {
+pub(crate) fn cloud_context_window(model: &str) -> i64 {
     let Ok(credentials) = account::load() else {
         return 0;
     };
@@ -383,7 +383,7 @@ fn settings_args(args: &[String], path: Option<&str>) -> Vec<String> {
 }
 
 /// A per-session file removed when this goes out of scope, a panic included.
-struct RemovedOnDrop(Option<String>);
+pub(crate) struct RemovedOnDrop(pub(crate) Option<String>);
 
 impl Drop for RemovedOnDrop {
     fn drop(&mut self) {
@@ -395,7 +395,7 @@ impl Drop for RemovedOnDrop {
 
 /// Writes `contents` to `path` readable by its owner only (it carries the
 /// translator's token).
-fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
+pub(crate) fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
     use std::io::Write;
     let mut options = fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);
@@ -411,12 +411,79 @@ fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
 /// image the person pastes for one is refused there, and any other becomes a
 /// note. Empty when the catalog could not be read, so nothing is refused on a
 /// guess and the gateway judges.
-fn text_only_ids(catalog: &[harness::CatalogModel]) -> Vec<String> {
+pub(crate) fn text_only_ids(catalog: &[harness::CatalogModel]) -> Vec<String> {
     catalog
         .iter()
         .filter(|model| model.text_only)
         .map(|model| model.id.clone())
         .collect()
+}
+
+/// The 1M-token window Claude Desktop can be told a model holds.
+const MILLION_TOKENS: i64 = 1_000_000;
+
+/// The smallest `--context-window` accepted: below it a coding tool's own
+/// prompt and tools leave no room to work.
+const MINIMUM_CONTEXT_WINDOW: i64 = 16_384;
+
+/// The window a tool is told about: the model's own (`real`, 0 when unknown),
+/// or the smaller one the person asked for with `--context-window`, which
+/// makes the tool compact sooner. A request above the real window cannot be
+/// served, so the real window wins and the person is told.
+pub(crate) fn context_window_for_tool(real: i64, asked: Option<i64>) -> i64 {
+    match asked {
+        Some(asked) if real > 0 && asked > real => {
+            out::status_line(&format!(
+                "the model holds {real} tokens, so --context-window {asked} is capped there"
+            ));
+            real
+        }
+        Some(asked) => asked,
+        None => real,
+    }
+}
+
+/// The problem with a `--context-window` value, before anything is started.
+pub(crate) fn context_window_problem(asked: Option<i64>) -> Option<String> {
+    match asked {
+        Some(asked) if asked < MINIMUM_CONTEXT_WINDOW => Some(format!(
+            "--context-window must be at least {MINIMUM_CONTEXT_WINDOW} tokens"
+        )),
+        _ => None,
+    }
+}
+
+/// The family names in `aliases` whose catalog model holds at least a
+/// 1M-token window, for the desktop profile's `supports1m`.
+fn million_token_aliases(aliases: &ModelAliases, catalog: &[harness::CatalogModel]) -> Vec<String> {
+    aliases
+        .iter()
+        .filter(|(_, id)| {
+            catalog
+                .iter()
+                .any(|model| &model.id == id && model.context_window >= MILLION_TOKENS)
+        })
+        .map(|(family, _)| family.clone())
+        .collect()
+}
+
+/// The families Claude Desktop is told hold 1M tokens. The app picks between
+/// only two windows, the Claude model's own (200K) and 1M, so a
+/// `--context-window` below 1M keeps every entry at 200K.
+fn desktop_million_token(
+    aliases: &ModelAliases,
+    catalog: &[harness::CatalogModel],
+    context_override: Option<i64>,
+) -> Vec<String> {
+    match context_override {
+        Some(asked) if asked < MILLION_TOKENS => {
+            out::status_line(
+                "claude desktop sizes models at 200K or 1M only; --context-window below 1M keeps 200K",
+            );
+            Vec::new()
+        }
+        _ => million_token_aliases(aliases, catalog),
+    }
 }
 
 /// Starts the translator and holds it open, printing what to point at it.
@@ -467,7 +534,13 @@ fn restore(editor: &Editor) -> i32 {
     0
 }
 
-fn run(editor: &Editor, model: &str, args: &[String], options: &GlobalOptions) -> i32 {
+fn run(
+    editor: &Editor,
+    model: &str,
+    args: &[String],
+    context_override: Option<i64>,
+    options: &GlobalOptions,
+) -> i32 {
     let is_bundle = !editor.bundle.is_empty();
     // Only macOS fills this in; elsewhere a bundle editor is an error.
     #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
@@ -571,10 +644,26 @@ fn run(editor: &Editor, model: &str, args: &[String], options: &GlobalOptions) -
         // thread and takes `applied` before restoring, so a signal mid-apply
         // waits for those writes to finish rather than racing them, and it only
         // restores once `applied` is set — there is nothing to undo before then.
+        //
+        // The run and the app it opened end together. `instance` is the pid of
+        // the Claude Desktop this run started (0 until it is found): Ctrl-C
+        // quits that instance before restoring, and the instance exiting ends
+        // the run even when `open -W` does not notice.
         let applied = std::sync::Arc::new(std::sync::Mutex::new(false));
         let applied_for_signal = std::sync::Arc::clone(&applied);
+        #[cfg(target_os = "macos")]
+        let instance = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
+        #[cfg(target_os = "macos")]
+        let instance_for_signal = std::sync::Arc::clone(&instance);
         let editor_id = editor.id;
         let _restore_on_signal = crate::util::interrupt::on_interrupt(move || {
+            #[cfg(target_os = "macos")]
+            {
+                let pid = instance_for_signal.load(std::sync::atomic::Ordering::SeqCst);
+                if pid > 0 && !desktop::instance::quit(pid, std::time::Duration::from_secs(5)) {
+                    out::error_line(&format!("{editor_id} did not quit; close it by hand"));
+                }
+            }
             let done = applied_for_signal
                 .lock()
                 .unwrap_or_else(|poison| poison.into_inner());
@@ -606,6 +695,7 @@ fn run(editor: &Editor, model: &str, args: &[String], options: &GlobalOptions) -
                 &shim.base_url,
                 &shim.auth_token,
                 &desktop_aliases,
+                &desktop_million_token(&desktop_aliases, &catalog, context_override),
                 &format!("RunAnywhere \u{b7} {model}"),
             ) {
                 out::error_line(&failure);
@@ -614,6 +704,43 @@ fn run(editor: &Editor, model: &str, args: &[String], options: &GlobalOptions) -
                 return 1;
             }
             *done = true;
+        }
+        // Set once `launch` returns, so the watcher below leaves the normal
+        // ending to this thread when `open -W` did notice the app quit.
+        let finished = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        #[cfg(target_os = "macos")]
+        {
+            let before = desktop::instance::main_pids(&bundle);
+            let bundle = bundle.clone();
+            let instance = std::sync::Arc::clone(&instance);
+            let finished = std::sync::Arc::clone(&finished);
+            let applied = std::sync::Arc::clone(&applied);
+            std::thread::spawn(move || {
+                let Some(pid) = desktop::instance::wait_for_new(
+                    &bundle,
+                    &before,
+                    std::time::Duration::from_secs(60),
+                ) else {
+                    return;
+                };
+                instance.store(pid, std::sync::atomic::Ordering::SeqCst);
+                desktop::instance::wait_for_exit(pid);
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                if finished.load(std::sync::atomic::Ordering::SeqCst) {
+                    return;
+                }
+                let _done = applied.lock().unwrap_or_else(|poison| poison.into_inner());
+                if let Err(failure) = desktop::restore_gateway() {
+                    out::error_line(&failure);
+                    out::error_line(&format!(
+                        "could not put {editor_id} back on Anthropic; run `wally {editor_id} --restore`"
+                    ));
+                }
+                out::status_line(&format!("{editor_id} quit; wally is done"));
+                // SAFETY: _exit has no preconditions and does not return; it
+                // skips destructors the same way the interrupt path does.
+                unsafe { libc::_exit(0) };
+            });
         }
         // A new instance reads the gateway profile at startup. The one already
         // running keeps the profile it started with, and keeps whatever the
@@ -624,6 +751,8 @@ fn run(editor: &Editor, model: &str, args: &[String], options: &GlobalOptions) -
             &editor_env::open_args(&bundle, &shim, args, model),
             options,
         );
+        finished.store(true, std::sync::atomic::Ordering::SeqCst);
+        let _done = applied.lock().unwrap_or_else(|poison| poison.into_inner());
         if let Err(failure) = desktop::restore_gateway() {
             out::error_line(&failure);
         }
@@ -661,11 +790,17 @@ fn run(editor: &Editor, model: &str, args: &[String], options: &GlobalOptions) -
         // Claude Code budgets against the local server's configured window, or
         // the hosted catalog when available.
         let mut _context_window = None;
-        let context = if endpoint.serving {
+        // The catalog read above already carries the hosted window (the
+        // launched model is first); asking the console again only when it
+        // did not.
+        let real = if endpoint.serving {
             endpoint.context_window
+        } else if catalog[0].context_window > 0 {
+            catalog[0].context_window
         } else {
             cloud_context_window(model)
         };
+        let context = context_window_for_tool(real, context_override);
         if context > 0 {
             _context_window = Some(ScopedEnv::new(
                 "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
@@ -829,6 +964,11 @@ pub fn register_editors(app: &mut App) {
         if editor.wiring == Wiring::ClaudeProfile {
             command.add_flag("--restore", "Put Claude Desktop back on Anthropic and exit");
         }
+        command.add_option(
+            "--context-window",
+            ValueType::Int64,
+            "Tell the tool the model holds this many tokens, so it compacts sooner",
+        );
         // Tokens after the wally flags belong to the tool, its own flags
         // included. They reach here as positionals because `run()` inserts a
         // `--` ahead of them (see SplitPassthroughArgv); CLI11 would otherwise
@@ -842,6 +982,10 @@ pub fn register_editors(app: &mut App) {
                 return restore(&editor);
             }
             if harness::refuse_decisions_model(p.get_str("--model").as_deref()) {
+                return 2;
+            }
+            if let Some(problem) = context_window_problem(p.get_i64("--context-window")) {
+                out::error_line(&problem);
                 return 2;
             }
             // A missing harness shows only that it is missing and how to get
@@ -886,7 +1030,13 @@ pub fn register_editors(app: &mut App) {
             if p.flag("--serve") {
                 serve(&editor, &effective, g)
             } else {
-                run(&editor, &effective, &p.get_strs("args"), g)
+                run(
+                    &editor,
+                    &effective,
+                    &p.get_strs("args"),
+                    p.get_i64("--context-window"),
+                    g,
+                )
             }
         });
     }
@@ -900,6 +1050,56 @@ mod tests {
     /// A ~/.claude/settings.json `env` block naming a relay outranks the
     /// environment wally launches Claude Code with, so wally's endpoint goes in
     /// as command-line settings, which outrank it: every variable, as `env`.
+    #[test]
+    fn a_smaller_context_window_is_passed_and_a_larger_one_is_capped() {
+        assert_eq!(context_window_for_tool(1_048_567, None), 1_048_567);
+        assert_eq!(context_window_for_tool(1_048_567, Some(50_000)), 50_000);
+        assert_eq!(context_window_for_tool(200_000, Some(500_000)), 200_000);
+        // Unknown real window: the asked one is all there is.
+        assert_eq!(context_window_for_tool(0, Some(50_000)), 50_000);
+    }
+
+    #[test]
+    fn a_context_window_too_small_for_a_session_is_refused() {
+        assert!(context_window_problem(Some(1_000)).is_some());
+        assert!(context_window_problem(Some(16_384)).is_none());
+        assert!(context_window_problem(None).is_none());
+    }
+
+    #[test]
+    fn below_1m_desktop_offers_no_1m_variant() {
+        let aliases: ModelAliases = vec![("claude-sonnet-4-5".to_string(), "big".to_string())];
+        let catalog = vec![harness::CatalogModel {
+            id: "big".to_string(),
+            context_window: 1_048_567,
+            ..Default::default()
+        }];
+        assert!(desktop_million_token(&aliases, &catalog, Some(50_000)).is_empty());
+        assert_eq!(desktop_million_token(&aliases, &catalog, None).len(), 1);
+    }
+
+    #[test]
+    fn only_aliases_of_million_token_models_get_the_1m_variant() {
+        let aliases: ModelAliases = vec![
+            ("claude-sonnet-4-5".to_string(), "big".to_string()),
+            ("claude-opus-5".to_string(), "small".to_string()),
+            (
+                "claude-haiku-4-5-20251001".to_string(),
+                "unknown".to_string(),
+            ),
+        ];
+        let model = |id: &str, context_window: i64| harness::CatalogModel {
+            id: id.to_string(),
+            context_window,
+            ..Default::default()
+        };
+        let catalog = vec![model("big", 1_048_567), model("small", 200_000)];
+        assert_eq!(
+            million_token_aliases(&aliases, &catalog),
+            vec!["claude-sonnet-4-5".to_string()]
+        );
+    }
+
     #[test]
     fn endpoint_settings_carry_wallys_variables_as_env() {
         let env = vec![

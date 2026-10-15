@@ -122,11 +122,14 @@ pub fn profile_directory() -> String {
 /// Takes effect on the app's next launch, never on a running one. `models` is
 /// (Anthropic family name -> real id) pairs, the first the default: each
 /// becomes a picker entry whose `name` the app maps to a family and whose
-/// `labelOverride` shows the real id.
+/// `labelOverride` shows the real id. `million_token` names the families whose
+/// model holds a 1M-token window: without saying so the app sizes each entry by
+/// the Claude model it is named after, and compacts a 1M model at 200K.
 pub fn apply_gateway(
     base_url: &str,
     api_key: &str,
     models: &[(String, String)],
+    million_token: &[String],
     display_name: &str,
 ) -> Result<(), String> {
     if home().is_empty() {
@@ -167,7 +170,16 @@ pub fn apply_gateway(
         // rather than the one we route under.
         let inference: Vec<Value> = models
             .iter()
-            .map(|(name, label)| json!({"name": name, "labelOverride": label}))
+            .map(|(name, label)| {
+                let mut entry = json!({"name": name, "labelOverride": label});
+                // `supports1m` offers the 1M variant; `prefer1m` makes it the
+                // only one, so every session asks for the window the model has.
+                if million_token.contains(name) {
+                    entry["supports1m"] = json!(true);
+                    entry["prefer1m"] = json!(true);
+                }
+                entry
+            })
             .collect();
         obj.insert("inferenceModels".to_string(), Value::Array(inference));
         // Asked for explicitly: with inferenceModels set the app would
