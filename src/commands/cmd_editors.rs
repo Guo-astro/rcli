@@ -735,8 +735,13 @@ fn run(
         // Claude Code budgets against the local server's configured window, or
         // the hosted catalog when available.
         let mut _context_window = None;
+        // The catalog read above already carries the hosted window (the
+        // launched model is first); asking the console again only when it
+        // did not.
         let real = if endpoint.serving {
             endpoint.context_window
+        } else if catalog[0].context_window > 0 {
+            catalog[0].context_window
         } else {
             cloud_context_window(model)
         };

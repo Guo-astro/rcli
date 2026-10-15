@@ -517,6 +517,11 @@ pub trait StreamSink {
     fn on_end(&mut self, end: StreamEnd) -> String;
 }
 
+/// The most a single SSE line, or a payload still waiting for its blank line,
+/// may hold. Far above any real chunk (a whole tool call's arguments arrive in
+/// one from some providers), and a bound on an upstream that never ends a line.
+pub const MAX_SSE_FRAME: usize = 16 << 20;
+
 /// Splits SSE lines into complete `data:` payloads across arbitrary transport
 /// chunks: CRLF and multi-line data fields are valid SSE too. Comments and
 /// other fields are skipped.
@@ -525,6 +530,7 @@ pub struct SseFrames {
     pending: Vec<u8>,
     payload: Vec<u8>,
     has_data: bool,
+    overflowed: bool,
 }
 
 impl SseFrames {
@@ -568,7 +574,16 @@ impl SseFrames {
                 return false;
             }
         }
+        if self.pending.len() > MAX_SSE_FRAME || self.payload.len() > MAX_SSE_FRAME {
+            self.overflowed = true;
+        }
         true
+    }
+
+    /// A line or payload grew past `MAX_SSE_FRAME`: the stream is unusable.
+    /// Separate from `feed`'s false, which means the reader left.
+    pub fn overflowed(&self) -> bool {
+        self.overflowed
     }
 
     /// Bytes are left that no blank line completed.
@@ -704,6 +719,21 @@ pub fn relay_stream(
                 events.is_empty() || writer.write_chunk(events.as_bytes()).is_ok()
             };
             if !frames.feed(&bytes, &mut write_payload) {
+                return;
+            }
+            if frames.overflowed() {
+                // Ended as a cut stream, so the editor sees an error event
+                // rather than silence; dropping the pipe stops the upstream.
+                shim_log(&format!(
+                    "upstream sent an SSE frame over {MAX_SSE_FRAME} bytes; stream ended"
+                ));
+                let closing = sink.on_end(StreamEnd::Ended {
+                    incomplete_tail: true,
+                });
+                if !closing.is_empty() {
+                    let _ = writer.write_chunk(closing.as_bytes());
+                }
+                let _ = writer.end_chunked();
                 return;
             }
         }
@@ -844,6 +874,28 @@ mod tests {
     fn sse_frames_report_a_cut_frame_as_incomplete() {
         assert!(frames_of(&[b"data: {}\n"]).1);
         assert!(frames_of(&[b"data: {"]).1);
+    }
+
+    #[test]
+    fn sse_frames_flag_a_line_that_never_ends() {
+        let mut frames = SseFrames::default();
+        let chunk = vec![b'x'; 1 << 20];
+        let mut fed = 0;
+        while !frames.overflowed() {
+            assert!(frames.feed(&chunk, &mut |_| true));
+            fed += chunk.len();
+            assert!(fed <= MAX_SSE_FRAME + chunk.len(), "never flagged");
+        }
+        assert!(frames.incomplete());
+    }
+
+    #[test]
+    fn sse_frames_flag_data_lines_that_never_reach_a_blank_line() {
+        let mut frames = SseFrames::default();
+        let line = format!("data: {}\n", "y".repeat(1 << 20));
+        while !frames.overflowed() {
+            frames.feed(line.as_bytes(), &mut |_| panic!("no payload is complete"));
+        }
     }
 
     #[test]
