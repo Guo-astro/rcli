@@ -1136,6 +1136,29 @@ pub fn deep_seek_wants_headless(args: &[String]) -> bool {
         .unwrap_or(false)
 }
 
+/// The launcher arguments that open dsh's web UI with our overlay.
+///
+/// dsh's web profile binds one fixed port (127.0.0.1:3080) unless told
+/// otherwise, so a second `wally deepseek` while an earlier one is still open
+/// failed with EADDRINUSE (seen 2026-10-15: a 9.5-hour-old web UI held the
+/// port). `--port 0` lets the OS pick a free one; dsh prints the URL it took.
+/// A port the person chose themselves is left to them.
+pub fn deep_seek_web_args(patch_path: &str, child_args: &[String]) -> Vec<String> {
+    let mut args = vec![
+        "web".to_string(),
+        "--patch".to_string(),
+        patch_path.to_string(),
+    ];
+    let chose_port = child_args
+        .iter()
+        .any(|arg| arg == "--port" || arg.starts_with("--port="));
+    if !chose_port {
+        args.push("--port".to_string());
+        args.push("0".to_string());
+    }
+    args
+}
+
 /// The `llm-pi-ai` config that registers our provider with dsh. JSON, which
 /// the YAML patch embeds as a flow mapping, so every value is escaped by the
 /// serializer rather than by hand.
@@ -1460,7 +1483,7 @@ pub fn launch_agent(agent: &Agent, model: &str, args: &[String], options: &Globa
                 ]
             } else {
                 out::status_line("opening the dsh web ui; pass a prompt to run headless instead");
-                vec!["web".to_string(), "--patch".to_string(), config.path()]
+                deep_seek_web_args(&config.path(), &child_args)
             };
             launch_args.extend(child_args.iter().cloned());
             out::status_line(&format!(
