@@ -5,7 +5,7 @@ use std::process::Command;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::account::{
-    self as account, ConsoleClient, Credentials, Grant, IdentityResult, PollResult,
+    self as account, ConsoleClient, ConsoleSession, Credentials, Grant, IdentityResult, PollResult,
 };
 use crate::cli::App;
 use crate::cli_formatter::{examples_footer, Example};
@@ -231,6 +231,26 @@ fn refresh_session(client: &ConsoleClient, credentials: &mut Credentials) -> Res
     account::save(credentials)
 }
 
+/// True when the saved session for `console_url` is still accepted by the
+/// console, refreshing an expiring token first. Any failure, including an
+/// unreachable console, counts as not signed in so login stays available.
+fn session_is_valid(
+    client: ConsoleClient,
+    credentials: Credentials,
+    console_url: &str,
+    now: i64,
+) -> bool {
+    if credentials.console_url != console_url {
+        return false;
+    }
+    let Ok(mut session) = ConsoleSession::resume(client, credentials, now) else {
+        return false;
+    };
+    session
+        .call(|client, url, token| client.who_am_i(url, token))
+        .is_ok()
+}
+
 fn login(requested_console: &str, open: bool) -> i32 {
     let configured = if requested_console.is_empty() {
         account::default_console_url()
@@ -244,6 +264,20 @@ fn login(requested_console: &str, open: bool) -> i32 {
             return 1;
         }
     };
+
+    if let Ok(credentials) = account::load() {
+        if credentials.signed_in()
+            && session_is_valid(
+                ConsoleClient::default(),
+                credentials,
+                &console_url,
+                epoch_seconds(),
+            )
+        {
+            out::status_line("You already logged-in..!");
+            return 0;
+        }
+    }
 
     let client = ConsoleClient::default();
     let host = hostname();
@@ -525,7 +559,7 @@ pub fn register_account(app: &mut App) {
 mod tests {
     use std::sync::Arc;
 
-    use super::{open_browser, rebase_approval_url, refresh_session};
+    use super::{open_browser, rebase_approval_url, refresh_session, session_is_valid};
     use crate::account::{ConsoleClient, Credentials, HttpRequest, HttpResponse, Transport};
     use crate::util::env_lock::lock as env_lock;
 
@@ -688,5 +722,50 @@ mod tests {
             failure.contains("https://api.example.test/cloud/billing"),
             "the refresh failure must name the billing URL: {failure}"
         );
+    }
+
+    fn client_answering(status: i32, body: &'static str) -> ConsoleClient {
+        ConsoleClient::new(Some(
+            Arc::new(move |_: &HttpRequest| -> Result<HttpResponse, String> {
+                Ok(HttpResponse {
+                    status,
+                    body: body.to_string(),
+                    ..Default::default()
+                })
+            }) as Transport,
+        ))
+    }
+
+    fn signed_in_credentials() -> Credentials {
+        Credentials {
+            console_url: "https://api.example.test".to_string(),
+            access_token: "access-token".to_string(),
+            ..Credentials::default()
+        }
+    }
+
+    #[test]
+    fn login_is_refused_while_the_saved_session_is_valid() {
+        let client = client_answering(
+            200,
+            r#"{"email":"a@example.test","plan":"beta","tokens_this_month":0,"monthly_token_limit":0}"#,
+        );
+        assert!(session_is_valid(
+            client,
+            signed_in_credentials(),
+            "https://api.example.test",
+            0
+        ));
+    }
+
+    #[test]
+    fn login_proceeds_when_the_saved_session_is_rejected() {
+        let client = client_answering(401, "{}");
+        assert!(!session_is_valid(
+            client,
+            signed_in_credentials(),
+            "https://api.example.test",
+            0
+        ));
     }
 }
