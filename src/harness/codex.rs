@@ -20,16 +20,19 @@ pub const CODEX_KEY_VARIABLE: &str = "WALLY_CODEX_API_KEY";
 /// What Codex assumes when the catalog does not say: ollama's fallback.
 const FALLBACK_CONTEXT_WINDOW: i64 = 128_000;
 
-/// A TOML string for a `-c` value, single-quoted (a literal string) whenever
-/// it can be. On Windows Codex is npm's `codex.cmd`, and a double quote cannot
-/// be passed safely through cmd.exe, so the launcher refuses one
-/// (`build_batch_command_line`); a literal string needs none and keeps a
-/// Windows path's backslashes as they are. A value holding a `'` or a control
-/// character cannot be a literal string and becomes a basic one, whose JSON
-/// escapes are valid TOML.
+/// A TOML string for a `-c` value, written as a literal string so it needs no
+/// double quote. On Windows Codex is npm's `codex.cmd`, and a double quote
+/// cannot be passed safely through cmd.exe, so the launcher refuses one
+/// (`build_batch_command_line`); a literal string also keeps a Windows path's
+/// backslashes as they are. A value with a `'` in it (a home folder such as
+/// `o'brien`) takes the multi-line literal form, which may hold one or two in
+/// a row. Only a value with three in a row or a control character, which none
+/// of ours can have, falls back to a basic string.
 fn toml_string(value: &str) -> String {
-    if value.contains('\'') || value.chars().any(char::is_control) {
+    if value.chars().any(char::is_control) || value.contains("'''") {
         serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
+    } else if value.contains('\'') {
+        format!("'''{value}'''")
     } else {
         format!("'{value}'")
     }
@@ -181,9 +184,29 @@ mod tests {
     }
 
     #[test]
-    fn a_value_with_a_single_quote_becomes_a_basic_string() {
-        let argv = codex_overrides("http://x/v1", Some("/Users/o'brien/m.json"), 0);
-        assert!(argv.contains(&"model_catalog_json=\"/Users/o'brien/m.json\"".to_string()));
+    fn a_path_with_an_apostrophe_is_a_multi_line_literal_string() {
+        let argv = codex_overrides("http://x/v1", Some("C:\\Users\\o'brien\\m.json"), 0);
+        assert!(argv.contains(&"model_catalog_json='''C:\\Users\\o'brien\\m.json'''".to_string()));
+    }
+
+    /// What the Windows launcher would actually run: with an apostrophe in
+    /// the home folder and a backslashed path, every argument passes the
+    /// check `codex.cmd` is launched through.
+    #[test]
+    fn the_overrides_pass_the_windows_cmd_launcher() {
+        let argv = codex_argv(
+            &codex_overrides(
+                "http://127.0.0.1:5000/v1",
+                Some("C:\\Users\\o'brien\\AppData\\Local\\RunAnywhere\\state\\codex\\m.json"),
+                1_048_567,
+            ),
+            "glm-5.3-flash",
+            &strings(&["exec", "hi"]),
+        );
+        assert!(
+            crate::harness::build_batch_command_line("C:\\npm\\codex.cmd", &argv).is_ok(),
+            "{argv:?}"
+        );
     }
 
     #[test]
