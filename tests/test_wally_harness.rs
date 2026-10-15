@@ -1328,3 +1328,30 @@ fn deepseek_settings_declare_the_harness() {
         serde_json::json!({"X-RA-Harness": "deepseek"})
     );
 }
+
+// dsh's web profile binds 127.0.0.1:3080 by default, so a second web UI while
+// an earlier `wally deepseek` is still open failed with EADDRINUSE. The web UI
+// asks the OS for a free port instead, unless the person chose one.
+#[test]
+fn deepseek_web_ui_takes_a_free_port_unless_one_was_chosen() {
+    let strings = |items: &[&str]| {
+        items
+            .iter()
+            .map(|item| item.to_string())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        harness::deep_seek_web_args("/tmp/overlay.yaml", &[]),
+        strings(&["web", "--patch", "/tmp/overlay.yaml", "--port", "0"])
+    );
+    assert_eq!(
+        harness::deep_seek_web_args("/tmp/overlay.yaml", &strings(&["--no-open"])),
+        strings(&["web", "--patch", "/tmp/overlay.yaml", "--port", "0"])
+    );
+    for chosen in [strings(&["--port", "8080"]), strings(&["--port=8080"])] {
+        assert_eq!(
+            harness::deep_seek_web_args("/tmp/overlay.yaml", &chosen),
+            strings(&["web", "--patch", "/tmp/overlay.yaml"])
+        );
+    }
+}
