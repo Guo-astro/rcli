@@ -17,9 +17,11 @@ pub const CODEX_PROVIDER_ID: &str = "wally";
 /// The variable Codex reads the loopback token from (`env_key`).
 pub const CODEX_KEY_VARIABLE: &str = "WALLY_CODEX_API_KEY";
 
-/// The levels a catalog entry offers in Codex's effort picker.
+/// Every level Codex's effort picker can offer, lowest first, with the
+/// line it shows. A hosted model offers the ones its model list entry names.
 const REASONING_LEVELS: &[(&str, &str)] = &[
     ("none", "No reasoning"),
+    ("minimal", "The least reasoning the model allows"),
     ("low", "Quick reasoning"),
     ("medium", "Balanced reasoning"),
     ("high", "Thorough reasoning"),
@@ -31,9 +33,10 @@ const REASONING_LEVELS: &[(&str, &str)] = &[
 const FALLBACK_CONTEXT_WINDOW: i64 = 128_000;
 
 /// A TOML string for a `-c` value or a settings line, written as a literal string so it needs no
-/// double quote. On Windows Codex is npm's `codex.cmd`, and a double quote
-/// cannot be passed safely through cmd.exe, so the launcher refuses one
-/// (`build_batch_command_line`); a literal string also keeps a Windows path's
+/// double quote. On Windows Codex is npm's `codex.cmd`; wally runs the script
+/// behind it with node, but where it cannot, the shim goes through cmd.exe,
+/// which cannot be handed a double quote safely, so the launcher refuses one
+/// (`build_batch_command_line`). A literal string also keeps a Windows path's
 /// backslashes as they are. A value with a `'` in it (a home folder such as
 /// `o'brien`) takes the multi-line literal form, which may hold one or two in
 /// a row. Only a value with three in a row or a control character, which none
@@ -46,6 +49,28 @@ pub(crate) fn toml_string(value: &str) -> String {
     } else {
         format!("'{value}'")
     }
+}
+
+/// The levels `model`'s entry offers in Codex's effort picker. A hosted
+/// model offers the levels its model list entry grades by, and `none` only
+/// when that turns its thinking off (the gateway refuses `none` otherwise).
+/// A model that only switches thinking on or off, or one the list does not
+/// describe, offers every level: the gateway takes them all.
+fn reasoning_levels(model: &CatalogModel) -> Vec<(&'static str, &'static str)> {
+    let Some(reasoning) = &model.reasoning else {
+        return REASONING_LEVELS.to_vec();
+    };
+    REASONING_LEVELS
+        .iter()
+        .filter(|(level, _)| {
+            if *level == "none" {
+                reasoning.thinking_off
+            } else {
+                reasoning.levels.is_empty() || reasoning.levels.contains(level)
+            }
+        })
+        .copied()
+        .collect()
 }
 
 /// One `model_catalog_json` entry. Codex has no metadata for a model it did not ship, and without an
@@ -76,15 +101,14 @@ fn catalog_entry(model: &CatalogModel, priority: usize) -> Value {
         "default_verbosity": "low",
         "supports_parallel_tool_calls": true,
         "supports_reasoning_summaries": true,
-        // What Codex's effort picker offers. Every hosted model takes all of
-        // these as `reasoning_effort`; `none` turns reasoning off. No default:
-        // Codex then sends the person's own setting, or nothing, and the
-        // model keeps its own default.
-        "supported_reasoning_levels": REASONING_LEVELS
+        "supported_reasoning_levels": reasoning_levels(model)
             .iter()
             .map(|(effort, description)| json!({"effort": effort, "description": description}))
             .collect::<Vec<_>>(),
-        "default_reasoning_level": Value::Null,
+        "default_reasoning_level": model
+            .reasoning
+            .as_ref()
+            .and_then(|reasoning| reasoning.default_level),
         // The only value Codex 0.162 accepts. Leaving it out leaves Codex with no apply_patch tool at all and the model editing
         // files through shell heredocs; the translator carries the freeform
         // tool as a function and back.
@@ -149,6 +173,69 @@ pub fn codex_settings(
         settings.push(format!("model_context_window={context_window}"));
     }
     settings
+}
+
+/// The settings in the person's own `config.toml` (`user_config`, its text)
+/// that describe this machine rather than a session, as `-c` values for the
+/// Codex home wally launches with: the `[windows]` table, where Codex records
+/// which Windows sandbox the person set up (`sandbox = "elevated"`). Without
+/// it a wally session has no sandbox and Codex refuses every command.
+///
+/// Only plain values are carried (a string without escapes, a boolean, a
+/// number); anything else is left for Codex's default.
+pub fn carried_settings(user_config: &str) -> Vec<String> {
+    let mut settings = Vec::new();
+    let mut table: Option<String> = None;
+    for line in user_config.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            table = line
+                .strip_prefix('[')
+                .and_then(|rest| rest.split(']').next())
+                .filter(|_| !line.starts_with("[["))
+                .map(|name| name.trim().to_string());
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let key = key.trim();
+        let full = match table.as_deref() {
+            Some(name) => format!("{name}.{key}"),
+            None => key.to_string(),
+        };
+        let Some(member) = full.strip_prefix("windows.") else {
+            continue;
+        };
+        let plain_key = !member.is_empty()
+            && member
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+        if let Some(value) = plain_value(value).filter(|_| plain_key) {
+            settings.push(format!("windows.{member}={value}"));
+        }
+    }
+    settings
+}
+
+/// A TOML value from the right of `=`, rewritten without double quotes, or
+/// None when it is not a plain one.
+fn plain_value(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    for quote in ['"', '\''] {
+        if let Some(rest) = raw.strip_prefix(quote) {
+            let (inner, after) = rest.split_once(quote)?;
+            let after = after.trim();
+            let plain = !inner.contains('\\') || quote == '\'';
+            return (plain && (after.is_empty() || after.starts_with('#')))
+                .then(|| toml_string(inner));
+        }
+    }
+    let bare = raw.split('#').next().unwrap_or("").trim();
+    let scalar = bare == "true"
+        || bare == "false"
+        || (!bare.is_empty() && bare.parse::<f64>().is_ok() && !bare.contains(['n', 'N']));
+    scalar.then(|| bare.to_string())
 }
 
 /// Whether the person chose a model on Codex's own command line.
@@ -333,6 +420,69 @@ mod tests {
     }
 
     #[test]
+    fn the_windows_table_is_carried_without_double_quotes() {
+        let config = "model = \"gpt-5\"\nwindows.allow_mxc = false\n\n[windows]\nsandbox = \"elevated\" # set by codex\nsandbox_private_desktop = true\nweird = \"a\\\\b\"\nlist = [\"x\"]\n\n[tui]\nsandbox = \"no\"\n";
+        assert_eq!(
+            carried_settings(config),
+            [
+                "windows.allow_mxc=false",
+                "windows.sandbox='elevated'",
+                "windows.sandbox_private_desktop=true",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_config_without_windows_settings_carries_nothing() {
+        assert!(carried_settings(
+            "model = \"gpt-5\"\n[projects.\"/x\"]\ntrust_level = \"trusted\"\n"
+        )
+        .is_empty());
+        assert!(carried_settings("").is_empty());
+    }
+
+    #[test]
+    fn each_model_offers_its_own_levels_and_default() {
+        use crate::account::ReasoningSupport;
+        let muse = CatalogModel {
+            id: "muse-spark".to_string(),
+            reasoning: Some(ReasoningSupport {
+                levels: vec!["minimal", "low", "medium", "high", "xhigh"],
+                default_level: Some("medium"),
+                thinking_off: false,
+            }),
+            ..Default::default()
+        };
+        let mimo = CatalogModel {
+            id: "mimo-v2.6-pro".to_string(),
+            reasoning: Some(ReasoningSupport {
+                levels: vec![],
+                default_level: None,
+                thinking_off: true,
+            }),
+            ..Default::default()
+        };
+        let doc: Value = serde_json::from_str(&codex_model_catalog(&[muse, mimo])).unwrap();
+        let levels = |entry: &Value| -> Vec<String> {
+            entry["supported_reasoning_levels"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|level| level["effort"].as_str().unwrap().to_string())
+                .collect()
+        };
+        let entries = doc["models"].as_array().unwrap();
+        assert_eq!(
+            levels(&entries[0]),
+            ["minimal", "low", "medium", "high", "xhigh"]
+        );
+        assert_eq!(entries[0]["default_reasoning_level"], "medium");
+        assert_eq!(levels(&entries[1])[0], "none");
+        assert_eq!(levels(&entries[1]).len(), REASONING_LEVELS.len());
+        assert!(entries[1]["default_reasoning_level"].is_null());
+    }
+
+    #[test]
     fn the_catalog_lists_every_model_launched_first_with_its_window() {
         let models = vec![
             CatalogModel {
@@ -359,7 +509,10 @@ mod tests {
             .iter()
             .map(|level| level["effort"].as_str().unwrap())
             .collect();
-        assert_eq!(levels, ["none", "low", "medium", "high", "xhigh", "max"]);
+        assert_eq!(
+            levels,
+            ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+        );
         assert_eq!(entries[1]["slug"], "mimo-v2.6-pro");
         assert_eq!(entries[1]["context_window"], 128000);
         assert_eq!(entries[1]["input_modalities"], json!(["text"]));

@@ -3,7 +3,8 @@
 use crate::account::model_cache::cached_model_ids;
 use crate::anthropic::translate;
 use crate::harness::{
-    harness_header_value, upstream_user_agent, DeclaredHarness, Endpoint, HARNESS_HEADER,
+    fit_reasoning_effort, harness_header_value, text_only_ids, upstream_user_agent, CatalogModel,
+    DeclaredHarness, Endpoint, HARNESS_HEADER,
 };
 use crate::io::output::{error_line, status_line};
 use crate::net::http1::{ResponseWriter, Server, ServerHandle, ServerRequest};
@@ -61,6 +62,8 @@ struct Runtime {
     /// the request becomes a text note. A model not known to be text-only
     /// (the catalog could not be read) is sent as is, for the gateway to judge.
     text_only_models: Vec<String>,
+    /// The catalog's models, for what each takes as `reasoning_effort`.
+    models: Vec<CatalogModel>,
     /// What was refused this session: pasted images (by a hash of their data)
     /// and the latest turns that carried them (`translate::latest_turn_shape`).
     /// Claude Code retries a refused request, so the same turn is refused
@@ -124,6 +127,16 @@ fn effective_model(runtime: &Runtime, request: &Value) -> String {
     runtime.model.clone()
 }
 
+fn routable_ids(models: &[CatalogModel]) -> Vec<String> {
+    let mut ids = cached_model_ids();
+    for model in models {
+        if !ids.contains(&model.id) {
+            ids.push(model.id.clone());
+        }
+    }
+    ids
+}
+
 /// The model listed for the Claude tier `requested` names (`sonnet`, `opus`,
 /// `haiku`), when it is a `claude-` id: the alias in that tier's picker slot
 /// (`desktop::DESKTOP_TIERS`), whatever name the slot is listed under.
@@ -154,7 +167,9 @@ fn handle_non_streaming(
     writer: &mut ResponseWriter<'_>,
 ) {
     let effective = effective_model(runtime, request);
-    let upstream_body = translate::request_to_openai(request, &effective).to_string();
+    let mut upstream_body = translate::request_to_openai(request, &effective);
+    fit_reasoning_effort(&mut upstream_body, &runtime.models, &effective);
+    let upstream_body = upstream_body.to_string();
     // Claude Desktop probes every picker model at startup and errors the
     // whole gateway if one is refused, so a bursty rate-limited model on a
     // provider that answers ~1 request in 3 breaks it. Only there -- where
@@ -426,7 +441,9 @@ fn handle_streaming(
     writer: &mut ResponseWriter<'_>,
 ) {
     let effective = effective_model(runtime, request);
-    let upstream_body = translate::request_to_openai(request, &effective).to_string();
+    let mut upstream_body = translate::request_to_openai(request, &effective);
+    fit_reasoning_effort(&mut upstream_body, &runtime.models, &effective);
+    let upstream_body = upstream_body.to_string();
     let path = format!("{}/chat/completions", runtime.upstream.prefix);
     let mut state = translate::StreamState::new();
     state.model = effective.clone();
@@ -814,8 +831,8 @@ fn stop_running_instance() {
 /// `declared` (Claude Code or Claude Desktop) on every upstream request so the
 /// endpoint attributes the traffic to it. `advertised` is the
 /// model name reported to the tool (defaults to `model`); `aliases` map names
-/// the tool may send onto upstream ids; `text_only_models` take no image
-/// input (see `Runtime::text_only_models`). C++ defaulted verbose=false,
+/// the tool may send onto upstream ids; `models` is the catalog, for which
+/// take no image input and what each takes as `reasoning_effort`. C++ defaulted verbose=false,
 /// advertised="" and aliases={}. Like the C++ (which returned bool), it reports
 /// its own failures on stderr and returns None.
 pub fn start(
@@ -825,7 +842,7 @@ pub fn start(
     verbose: bool,
     advertised: &str,
     aliases: &ModelAliases,
-    text_only_models: &[String],
+    models: &[CatalogModel],
 ) -> Option<Shim> {
     stop_running_instance();
 
@@ -868,10 +885,11 @@ pub fn start(
         } else {
             advertised.to_string()
         },
-        // The real routable ids, for effective_model. Reads a local file,
-        // no network.
-        catalog: cached_model_ids(),
-        text_only_models: text_only_models.to_vec(),
+        // The real routable ids, for effective_model: the live catalog the
+        // picker lists, plus the cached ids (a local file, no network).
+        catalog: routable_ids(models),
+        text_only_models: text_only_ids(models),
+        models: models.to_vec(),
         refused: Mutex::new((HashSet::new(), HashSet::new())),
         aliases: aliases.clone(),
         local_token: local_token.clone(),

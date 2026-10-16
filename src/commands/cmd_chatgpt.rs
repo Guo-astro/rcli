@@ -27,12 +27,13 @@ mod mac {
     use crate::bootstrap::GlobalOptions;
     use crate::codex;
     use crate::commands::cmd_editors::{
-        cloud_context_window, context_window_for_tool, text_only_ids, write_private,
+        cloud_context_window, context_window_for_tool, write_private,
     };
     use crate::config::cli_paths;
     use crate::desktop::instance;
     use crate::harness::chatgpt::{
-        chatgpt_auth, chatgpt_config, chatgpt_settings, with_onboarding_done, CHATGPT_BUNDLE_ID,
+        chatgpt_auth, chatgpt_config, chatgpt_settings, with_all_efforts_enabled,
+        with_onboarding_done, CHATGPT_BUNDLE_ID,
     };
     use crate::harness::codex::{codex_model_catalog, CODEX_KEY_VARIABLE};
     use crate::harness::{self, CatalogModel};
@@ -109,7 +110,9 @@ mod mac {
             .map_err(|error| format!("could not write the app's Codex settings ({error})"))?;
         let state_path = folders.codex_home.join(".codex-global-state.json");
         let state = std::fs::read_to_string(&state_path).unwrap_or_default();
-        if let Some(done) = with_onboarding_done(&state, crate::codex::translate::now_unix()) {
+        if let Some(done) = with_onboarding_done(&state, crate::codex::translate::now_unix())
+            .and_then(|state| with_all_efforts_enabled(&state))
+        {
             write_private(&state_path, &done)
                 .map_err(|error| format!("could not write the app's state ({error})"))?;
         }
@@ -135,9 +138,7 @@ mod mac {
             return 1;
         };
         let catalog = harness::catalog_models_for(&endpoint, model);
-        let Some(mut shim) =
-            codex::start(&endpoint, model, options.verbose, &text_only_ids(&catalog))
-        else {
+        let Some(mut shim) = codex::start(&endpoint, model, options.verbose, &catalog) else {
             harness::release(&endpoint);
             return 1;
         };
