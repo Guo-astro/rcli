@@ -278,10 +278,11 @@
             "$ref": "#/components/schemas/ModelId"
           },
           "prompt_format_version": {
-            "description": "Pins the server-owned prompt wording. Each model serves exactly one version and refuses any other with 400 before anything is billed, so a caller pinning it is told when the wording, and so the probabilities, change. Null or absent takes the model's served version.",
+            "description": "Pins the server-owned prompt wording. Each model serves one version (two while it moves from one wording to the next) and refuses any other with 400 before anything is billed, so a caller pinning it is told when the wording, and so the probabilities, change. Null or absent takes the model's served version.",
             "enum": [
               2,
               3,
+              4,
               null
             ],
             "type": [
@@ -330,10 +331,11 @@
             "const": "decisions"
           },
           "prompt_format_version": {
-            "description": "The prompt wording the answers were computed under: the requested model's one served version.",
+            "description": "The prompt wording the answers were computed under: the requested model's served version, or, while the model moves from one wording to the next, either of the two.",
             "enum": [
               2,
-              3
+              3,
+              4
             ]
           },
           "usage": {
@@ -1327,11 +1329,11 @@
       },
       "request": {
         "path": "public/decisions_request.schema.json",
-        "sha256": "4ea99e94ed549d4a16592757b9d7aa2ee1c67ff4d9558ce46997438abad26195"
+        "sha256": "19b58ab4ed78a457c89928cbd62119159efcc95767314cce0da47cb87efa8e4d"
       },
       "response": {
         "path": "public/decisions_response.schema.json",
-        "sha256": "68906e2b9bffa33d4f7d910b75665332ca11c248e51f4adab319f8707eb8c2a2"
+        "sha256": "852563984418b56b7f22cc3d1958f1a321a6ba45e9aece42401ea3628319c2c7"
       },
       "systemone_request": {
         "path": "public/systemone_request.schema.json",

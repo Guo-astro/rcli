@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 /// SHA-256 of contracts/wally-decisions-public-v1.openapi.json this file was built from.
 pub const CONTRACT_SHA256: &str =
-    "6cd5afaa222e55337dcab1fa4b2bbee2763cea707e18d539a5ca252f6a863d11";
+    "2201716c3f8f1ac4e5e70046a33939a631aacd503fa7a7a7539236197af4eb97";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ErrorCode {
