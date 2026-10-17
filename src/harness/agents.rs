@@ -1104,7 +1104,20 @@ pub fn build_open_claw_config(
                 "cacheWrite": 0,
             });
         }
+        if let Some(efforts) = open_claw_reasoning_efforts(model) {
+            entry["reasoning"] = json!(true);
+            entry["compat"]["supportsReasoningEffort"] = json!(true);
+            entry["compat"]["supportedReasoningEfforts"] = efforts;
+        }
         entries.push(entry);
+    }
+    for model in models {
+        if let Some(default_level) = open_claw_reasoning_efforts(model)
+            .and(model.reasoning.as_ref())
+            .and_then(|reasoning| reasoning.default_level)
+        {
+            set_open_claw_default_thinking(&mut config, &model.id, default_level);
+        }
     }
     config["models"]["providers"][PROVIDER_ID] = json!({
         "baseUrl": base_url,
@@ -1211,6 +1224,52 @@ pub fn build_deep_seek_llm_config(
         "headers": { HARNESS_HEADER: harness_header_value(DeclaredHarness::KDeepseek) },
     });
     dump(&json!({ "providers": { PROVIDER_ID: provider } }))
+}
+
+/// The `/think` levels OpenClaw offers for `model`, as the efforts it may send:
+/// the model list's levels, and `none` first where that turns thinking off,
+/// so `/think off` sends `none`. Without them OpenClaw takes a model on a
+/// custom OpenAI-compatible provider not to reason (`--thinking high` is
+/// refused, "Use one of: off, ultra") and sends no `reasoning_effort` at all.
+/// Measured against OpenClaw 2026.10.4 with a capture server: low, xhigh and
+/// max are sent as themselves, `off` as `none`, and a level OpenClaw has that
+/// the model does not (medium on DeepSeek) as its nearest one. None for a
+/// model with no levels: with `reasoning` on and nothing to choose, OpenClaw
+/// would default it to thinking off, where today the endpoint thinks.
+fn open_claw_reasoning_efforts(model: &CatalogModel) -> Option<Value> {
+    let reasoning = model.reasoning.as_ref()?;
+    if reasoning.levels.is_empty() {
+        return None;
+    }
+    let mut efforts: Vec<&str> = Vec::new();
+    if reasoning.thinking_off {
+        efforts.push("none");
+    }
+    efforts.extend(reasoning.levels.iter().copied());
+    Some(json!(efforts))
+}
+
+/// `level` as OpenClaw's default `/think` for our `model`
+/// (`agents.defaults.models["runanywhere/<id>"].params.thinking`), unless the
+/// person's own config already sets one there. Without it OpenClaw picks its
+/// own default rather than the model list's. That table does not restrict
+/// the model picker (OpenClaw docs, tools/thinking.md). A config whose path
+/// there is not an object is left alone.
+fn set_open_claw_default_thinking(config: &mut Value, model: &str, level: &str) {
+    let key = format!("{PROVIDER_ID}/{model}");
+    let mut node = &mut *config;
+    for segment in ["agents", "defaults", "models", key.as_str(), "params"] {
+        if node.get(segment).is_none() {
+            node[segment] = json!({});
+        }
+        node = &mut node[segment];
+        if !node.is_object() {
+            return;
+        }
+    }
+    if node.get("thinking").is_none() {
+        node["thinking"] = json!(level);
+    }
 }
 
 /// pi-ai's reasoning levels (`ModelThinkingLevel` without `off`), the names
@@ -2280,6 +2339,71 @@ mod tests {
             provider["compat"],
             json!({"supportsDeveloperRole": false, "supportsReasoningEffort": true})
         );
+    }
+
+    #[test]
+    fn openclaw_offers_each_models_levels_and_defaults_to_the_lists_level() {
+        let models = [
+            reasoning_model(
+                "deepseek-v4.1-flash",
+                &["low", "high", "xhigh", "max"],
+                "high",
+            ),
+            CatalogModel {
+                reasoning: Some(crate::account::ReasoningSupport {
+                    levels: vec!["minimal", "low", "medium", "high", "xhigh"],
+                    default_level: Some("medium"),
+                    thinking_off: false,
+                }),
+                id: "muse-spark".to_string(),
+                ..Default::default()
+            },
+            CatalogModel {
+                id: "mimo-v2.6-pro".to_string(),
+                reasoning: Some(crate::account::ReasoningSupport {
+                    thinking_off: true,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        ];
+        // Their own default for muse stays theirs.
+        let existing = r#"{"agents":{"defaults":{"models":{"runanywhere/muse-spark":{"params":{"thinking":"low"}}}}}}"#;
+        let doc: Value = serde_json::from_str(&build_open_claw_config(
+            existing,
+            "deepseek-v4.1-flash",
+            "https://example.test/v1",
+            "k",
+            &models,
+        ))
+        .unwrap();
+        let entries = &doc["models"]["providers"]["runanywhere"]["models"];
+        assert_eq!(entries[0]["reasoning"], json!(true));
+        assert_eq!(entries[0]["compat"]["supportsReasoningEffort"], json!(true));
+        assert_eq!(
+            entries[0]["compat"]["supportedReasoningEfforts"],
+            json!(["none", "low", "high", "xhigh", "max"])
+        );
+        // Thinking cannot be turned off on muse-spark: no `none`.
+        assert_eq!(
+            entries[1]["compat"]["supportedReasoningEfforts"],
+            json!(["minimal", "low", "medium", "high", "xhigh"])
+        );
+        // No levels: left as before, so it is not defaulted to thinking off.
+        assert!(entries[2].get("reasoning").is_none());
+        assert!(entries[2]["compat"]
+            .get("supportedReasoningEfforts")
+            .is_none());
+        let defaults = &doc["agents"]["defaults"]["models"];
+        assert_eq!(
+            defaults["runanywhere/deepseek-v4.1-flash"]["params"]["thinking"],
+            "high"
+        );
+        assert_eq!(
+            defaults["runanywhere/muse-spark"]["params"]["thinking"],
+            "low"
+        );
+        assert!(defaults.get("runanywhere/mimo-v2.6-pro").is_none());
     }
 
     #[test]
