@@ -61,7 +61,21 @@ DeepSeek Harness shows the levels with "Provider default" first: its pi-ai
 adapter takes one default for every model on a route and refuses a request
 whose model lacks it, so wally leaves the default to the endpoint, which runs
 the model's own. It offers no Off, because pi-ai sends the same value for Off
-and for no choice at all.
+and for no choice at all. OpenClaw's `/think` (and `--thinking`) offers the
+model's levels, `off` sends `none` where the model can stop thinking, and the
+model's default is set for it unless your own config sets one
+(`agents.defaults.models["runanywhere/<model>"].params.thinking`). Claude Code
+starts each model at its default level (`--effort`, unless you pass your own),
+and `/effort` changes it; Codex and the ChatGPT app list each model's levels
+and start at its default.
+
+Three tools keep their own default. Hermes takes any level with `--reasoning`
+(`wally hermes -m <model> -- --reasoning high`) or `/reasoning`, and otherwise
+runs at `agent.reasoning_effort` in `~/.hermes/config.yaml` (per model under
+`agent.reasoning_overrides`), which wally does not write. Claude Desktop shows
+each model's levels up to its highest and starts at the app's own default.
+Prime Agent is given no reasoning levels yet: its models run at the
+endpoint's default, and a level has to be named in Prime Agent itself.
 
 Codex is told the model's context window through the catalog file, so its
 context meter and auto-compaction work against the real limit. Its hosted web
