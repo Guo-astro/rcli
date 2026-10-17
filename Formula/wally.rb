@@ -1,17 +1,17 @@
 # frozen_string_literal: true
 
 class Wally < Formula
-  desc "Run language, speech and image models on your own machine"
+  desc "Run models on your machine or your RunAnywhere account"
   homepage "https://github.com/RunanywhereAI/wally"
-  version "0.8.11"
+  version "0.8.12"
   license "MIT"
 
   # macOS arm64 ships the Swift MLX host
   # (llama.cpp + ONNX + Sherpa + MLX). Linux is not in this cut.
   on_macos do
     on_arm do
-      url "https://github.com/RunanywhereAI/wally/releases/download/v0.8.11/wally-0.8.11-macos-arm64.tar.gz"
-      # Placeholder -- the v0.8.11 release has not published a wally-named asset
+      url "https://github.com/RunanywhereAI/wally/releases/download/v0.8.12/wally-0.8.12-macos-arm64.tar.gz"
+      # Placeholder -- the v0.8.12 release has not published a wally-named asset
       # yet. scripts/release/update-tap.sh re-stamps this from the real release
       # checksum; a stale value here fails brew install's own hash check
       # rather than installing something unverified.
