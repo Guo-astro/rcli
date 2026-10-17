@@ -1183,6 +1183,9 @@ pub fn build_deep_seek_llm_config(
             };
             entry["maxTokens"] = json!(max_tokens);
         }
+        if let Some(efforts) = deep_seek_reasoning_efforts(model) {
+            entry["reasoningEfforts"] = efforts;
+        }
         entries.push(entry);
     }
     let provider = json!({
@@ -1190,6 +1193,12 @@ pub fn build_deep_seek_llm_config(
         "api": "openai-completions",
         "baseURL": base_url,
         "models": entries,
+        // Once a model reasons, pi-ai sends the system prompt as `developer`
+        // to any endpoint it does not recognise (pi-ai 0.85 getCompat); keep
+        // it `system`, as for a model that does not. `reasoning_effort` is
+        // how the gateway takes a level, stated rather than left to pi-ai's
+        // baseURL detection.
+        "compat": { "supportsDeveloperRole": false, "supportsReasoningEffort": true },
         // Always referenced, local server included. This used to be omitted
         // for a loopback endpoint on the theory that no reference meant a
         // keyless route; dsh 0.1.5 instead refuses the turn with "No API key
@@ -1202,6 +1211,40 @@ pub fn build_deep_seek_llm_config(
         "headers": { HARNESS_HEADER: harness_header_value(DeclaredHarness::KDeepseek) },
     });
     dump(&json!({ "providers": { PROVIDER_ID: provider } }))
+}
+
+/// pi-ai's reasoning levels (`ModelThinkingLevel` without `off`), the names
+/// dsh's llm-pi-ai adapter takes as `reasoningEfforts` keys.
+const PI_AI_LEVELS: &[&str] = &["minimal", "low", "medium", "high", "xhigh", "max"];
+
+/// The Effort control dsh offers for `model`: its levels from the model list,
+/// each sent as itself in `reasoning_effort`. dsh's llm-pi-ai adapter shows an
+/// Effort row only for a model whose entry declares `reasoningEfforts`; a
+/// hand-declared model without it reasons at the server's default with no
+/// control (DeepSeek's own adapter offers off / low / high / max). None for a
+/// model the list does not describe and for one that only switches thinking
+/// on or off: it gets no control, as before.
+///
+/// Two things are left out on purpose. A default: the adapter takes one only
+/// from the route's `reasoning`, the same for every model, and refuses a
+/// request on a model that lacks it, so with none dsh shows "Provider
+/// default", sends no level, and the gateway applies the model's own
+/// `default_level`. And `off`: pi-ai sends its wire value both for `off` and
+/// when no level is chosen, so declaring `off` as `none` would turn thinking
+/// off whenever Provider default is selected.
+fn deep_seek_reasoning_efforts(model: &CatalogModel) -> Option<Value> {
+    let reasoning = model.reasoning.as_ref()?;
+    let mut efforts = serde_json::Map::new();
+    for level in &reasoning.levels {
+        if PI_AI_LEVELS.contains(level) {
+            efforts.insert((*level).to_string(), json!(level));
+        }
+    }
+    if efforts.is_empty() {
+        None
+    } else {
+        Some(Value::Object(efforts))
+    }
 }
 
 /// `models.json` for Prime Agent 0.10. The Rust build dropped `-e`, and a
@@ -2169,6 +2212,74 @@ mod tests {
         let deepseek_models = &deepseek["providers"]["runanywhere"]["models"];
         assert_eq!(deepseek_models[0]["input"], json!(["text", "image"]));
         assert_eq!(deepseek_models[1]["input"], json!(["text"]));
+    }
+
+    fn reasoning_model(
+        id: &str,
+        levels: &[&'static str],
+        default_level: &'static str,
+    ) -> CatalogModel {
+        CatalogModel {
+            id: id.to_string(),
+            reasoning: Some(crate::account::ReasoningSupport {
+                levels: levels.to_vec(),
+                default_level: Some(default_level),
+                thinking_off: true,
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn dsh_offers_each_models_own_levels_from_the_model_list() {
+        let models = [
+            reasoning_model(
+                "deepseek-v4.1-flash",
+                &["low", "high", "xhigh", "max"],
+                "high",
+            ),
+            reasoning_model(
+                "muse-spark",
+                &["minimal", "low", "medium", "high", "xhigh"],
+                "medium",
+            ),
+            // Thinking on or off only, and a model the list does not describe.
+            CatalogModel {
+                id: "mimo-v2.6-pro".to_string(),
+                reasoning: Some(crate::account::ReasoningSupport::default()),
+                ..Default::default()
+            },
+            CatalogModel {
+                id: "local-model".to_string(),
+                ..Default::default()
+            },
+        ];
+        let doc: Value = serde_json::from_str(&build_deep_seek_llm_config(
+            "https://example.test/v1",
+            KEY_VARIABLE,
+            &models,
+        ))
+        .unwrap();
+        let provider = &doc["providers"]["runanywhere"];
+        let entries = &provider["models"];
+        assert_eq!(
+            entries[0]["reasoningEfforts"],
+            json!({"low": "low", "high": "high", "xhigh": "xhigh", "max": "max"})
+        );
+        assert_eq!(
+            entries[1]["reasoningEfforts"],
+            json!({"minimal": "minimal", "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh"})
+        );
+        assert!(entries[2].get("reasoningEfforts").is_none());
+        assert!(entries[3].get("reasoningEfforts").is_none());
+        // No `off`: pi-ai would send it whenever no level is chosen.
+        assert!(entries[0]["reasoningEfforts"].get("off").is_none());
+        // No route default: it would refuse every model without that level.
+        assert!(provider.get("reasoning").is_none());
+        assert_eq!(
+            provider["compat"],
+            json!({"supportsDeveloperRole": false, "supportsReasoningEffort": true})
+        );
     }
 
     #[test]
