@@ -62,6 +62,33 @@ Offer to explain a harness before running it. Someone who has just signed up
 does not yet know what opencode is, and "would you like me to explain how the
 opencode harness works?" is a better second message than a launched TUI.
 
+## Shannon and other tools
+
+`wally shannon -- -u "$APP_URL" -r "$REPO_PATH"` runs Shannon, an open-source AI
+pentester, on a model from the person's account. Only suggest it for a system
+they own or are authorised to test. It needs Docker running, plus Node 18+ unless Shannon 3.4.0 is
+installed on PATH, and wally sets up the model config and key itself. For a scan longer than a
+sign-in lasts, the person exports a console Cloud key as `WALLY_CLOUD_KEY`.
+Setup details, and how to point any other OpenAI-compatible tool at the
+endpoint by hand, are in `docs/EDITORS.md`.
+
+## Security tools
+
+`wally deepsec` and `wally vvah` run hosted security scanners on a model from the
+person's account. Only suggest them for a repo or system they own or are
+authorised to test. DeepSec (2.3.10) needs Node 18+ for `npx` unless a `deepsec` on PATH reports exactly 2.3.10; VVAH (1.5.1) needs
+Python 3.11–3.14. Wally sets up routing per tool (command-line flags for DeepSec, a
+config file in the Wally profile for VVAH); keys go in the child environment
+only, never on the command line, and competing variables are removed for that
+child only. For a
+run longer than a sign-in lasts, they export a console Cloud key as
+`WALLY_CLOUD_KEY`. Details are in `docs/EDITORS.md`.
+
+```bash
+wally deepsec -- init . "$REPO_PATH"
+wally vvah -- scan --repo "$REPO_PATH"
+```
+
 ## Running a model directly
 
 ```bash
@@ -103,6 +130,10 @@ harness; those surfaces refuse it and point back here.
 ## When something is wrong
 
 - **"not signed in"** — `wally account login`.
+- **"not available on this account" or "not on your account's model list"** —
+  that model may need approval. Check the model id first; if it is right and the
+  model is gated, request access in the console. Do not log in again.
+- **DeepSec or VVAH prerequisites missing** — install Node 18+ (DeepSec) or Python 3.11–3.14 (VVAH); see `docs/EDITORS.md`.
 - **"that key is not valid"** — the key was revoked or expired; `wally account login` again.
 - **opencode not installed** — `npm i -g opencode-ai`.
 - **a model is slow or unavailable** — `wally backends` shows which engines this

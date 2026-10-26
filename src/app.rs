@@ -134,7 +134,12 @@ pub fn configure_app(app: &mut App) {
                 "deepseek",
                 "prime-agent",
                 "command-code",
+                "shannon",
             ],
+        },
+        Section {
+            group: "Security tools",
+            names: &["deepsec", "vvah"],
         },
         Section {
             group: "Account",
@@ -178,6 +183,9 @@ fn is_passthrough_command(token: &str) -> bool {
         "deepseek",
         "prime-agent",
         "command-code",
+        "shannon",
+        "deepsec",
+        "vvah",
     ];
     NAMES.contains(&token)
 }

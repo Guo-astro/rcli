@@ -31,6 +31,9 @@ tool starts the way you already have it configured, and wally wires nothing.
 | `deepseek` | a `--patch` overlay on the argv that adds the provider to dsh's `llm-pi-ai` row; nothing enters `$DSH_HOME` |
 | `prime-agent` | a temporary extension loaded with `-e` that registers the provider for the run, with the key in `RUNANYWHERE_API_KEY`; nothing enters `~/.prime/agent` |
 | `command-code` | a `runanywhere-wally` provider merged into `~/.commandcode/providers.json` (it reads providers from nowhere else) and taken out when it exits: the original bytes go back if the file is unchanged, otherwise only that provider comes out. The file names `$WALLY_COMMAND_CODE_API_KEY` rather than holding the key. A local model, or a person with no Command Code sign-in, runs with `CMD_LOCAL_ONLY=1` (no Command Code gateway models, `/share`, `/usage` or server-side web tools); with no sign-in a placeholder `COMMAND_CODE_API_KEY` gets past Command Code's login screen. `--skip-onboarding --no-auto-update` are passed, `-t` is left to you. One run at a time (a lock in `~/.commandcode/`). Its own subcommands (`-- status`, `-- login`, …) run untouched; `-- acp` is wired, and there the editor picks the model |
+| `shannon` | not a coding tool: it runs [Shannon](#shannon) on a model from your account. A `models.json` in your wally profile and `SHANNON_AI_MODEL` / `SHANNON_AI_API_KEY` / `SHANNON_AI_BASE_URL` in the child's environment only |
+| `deepsec` | not a coding tool: it runs [DeepSec](#deepsec) on a hosted model from your account. Pi custom routing flags are injected for `init`, `setup`, `process` and `revalidate`; the API key is in `WALLY_DEEPSEC_API_KEY` for the child only |
+| `vvah` | not a coding tool: it runs [VVAH](#vvah) on a hosted model from your account. A `config.local.yaml` names the model per role; `OPENAI_API_KEY` and `OPENAI_BASE_URL` are set for the child only |
 
 Two flags go with `-m`. `--serve` holds the endpoint open and prints it instead
 of launching anything, which is how a tool nobody has taught wally about gets
@@ -303,3 +306,212 @@ Any other OpenAI-compatible client sends the field itself, for example
 `"reasoning_effort": "max"` beside `model` and `messages`, or
 `extra_body={"reasoning_effort": "max"}` in the OpenAI Python SDK.
 
+## Shannon
+
+[Shannon](https://github.com/KeygraphHQ/shannon) is an open-source AI pentester
+(AGPL-3.0, by Keygraph). It is a separate project that wally does not bundle.
+`wally shannon` points it at the models on your account.
+
+**Only scan systems you own or are explicitly authorised to test.** A scan
+sends real attack traffic at the target URL.
+
+What you need:
+
+- Docker, running. Shannon starts its scan in containers.
+- Node 18 or later, which brings `npx`. Skip this if you already have Shannon
+  `3.4.0` installed as `shannon` on your PATH.
+- A signed-in account (`wally account login`), or a Cloud key from the console.
+- Linux, macOS, or Windows through WSL2. Run wally inside WSL2 on Windows;
+  native Windows is refused.
+
+```bash
+wally account login
+wally shannon -- -u https://staging.example.com -r ./my-repo
+```
+
+The arguments after `--` are Shannon's own, and with no Shannon command wally
+runs `start`. Other commands pass through untouched:
+
+```bash
+wally shannon -- scans
+wally shannon -- status my-scan
+wally shannon -- logs my-scan
+wally shannon -- stop my-scan
+wally shannon -m glm-5.3-flash -- -u https://staging.example.com -r ./my-repo
+```
+
+`-m` picks the model; without it Shannon uses your default model
+(`wally models default <model>`) if your account has it. A model your account
+does not have is refused before anything starts.
+
+For `start`, wally:
+
+- runs the Shannon release it was checked against (`3.4.0`): your `shannon` on
+  PATH if it reports exactly that version, otherwise
+  `npx --yes @keygraph/shannon@3.4.0`;
+- refreshes your sign-in first if it would end within four hours;
+- writes every model your account can use, with its real context and output
+  limits, to `shannon/models.json` in your wally profile (owner-only, replaced
+  on every run) and passes it as `--models-config`;
+- sets `SHANNON_AI_MODEL=runanywhere:<model>`, `SHANNON_AI_API_KEY` and
+  `SHANNON_AI_BASE_URL` (wally's endpoint) for Shannon's process only. The key
+  is never in the arguments or in `models.json`;
+- removes `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `XAI_API_KEY` and
+  `WALLY_CLOUD_KEY` from Shannon's environment so none of them can take over
+  from your key. Your own shell is never changed.
+
+`--models-config` is wally's to set, so passing your own with `start` is refused.
+
+A signed-in session is short-lived. For a scan that runs longer than that,
+create a Cloud key in the console and export it as `WALLY_CLOUD_KEY` before
+running `wally shannon`; wally uses it instead of the session. It is read from
+the environment only.
+
+### Without wally
+
+Shannon needs a Pi `models.json` describing the endpoint, and the model named
+with the `runanywhere:` prefix chosen below. Write this as `models.json`:
+
+```json
+{
+  "providers": {
+    "runanywhere": {
+      "baseUrl": "https://inference.runanywhere.ai/v1",
+      "api": "openai-completions",
+      "authHeader": true,
+      "compat": { "supportsDeveloperRole": false },
+      "models": [
+        { "id": "glm-5.3-flash", "input": ["text"] }
+      ]
+    }
+  }
+}
+```
+
+then:
+
+```bash
+unset OPENAI_API_KEY ANTHROPIC_API_KEY XAI_API_KEY   # these take over from the key below
+export SHANNON_USE_PI_AUTH=0                          # do not reuse a local Pi login
+export SHANNON_AI_API_KEY='YOUR_CLOUD_KEY'
+export SHANNON_AI_MODEL=runanywhere:glm-5.3-flash
+npx --yes @keygraph/shannon@3.4.0 start -u https://staging.example.com -r ./my-repo \
+  --models-config ./models.json
+```
+
+For each model from `GET /v1/models`, map `max_input_tokens` to
+`contextWindow`, `max_output_tokens` to `maxTokens`, and `input_modalities` to
+`input` so Shannon knows the model's real limits and inputs. Do not use the
+`openai:` prefix. Shannon's built-in `openai` provider speaks the Responses
+API, which the endpoint does not serve; the `runanywhere` provider above speaks
+chat completions. `GET /v1/models` lists the ids and limits available to your
+account.
+
+### Models that need approval
+
+Some models need approval before an account can use them. If a model is not on
+your account's list, wally says so. That can also mean a mistyped or nonexistent
+id: check the id against `GET /v1/models` first, and request access in the
+console only if the model is gated.
+
+## Security tools
+
+`wally deepsec` and `wally vvah` point open-source repo scanners at models on
+your account. They are hosted-only: there is no local-model path. **Only scan
+repos and systems you own or are explicitly authorised to test.**
+
+Both need a signed-in account (`wally account login`), or a Cloud key from the
+console. The key is never passed on the command line or written into config
+files wally creates. For a run longer than a sign-in lasts, export a Cloud key
+as `WALLY_CLOUD_KEY` before you start (for example
+`export WALLY_CLOUD_KEY='YOUR_CLOUD_KEY'`); wally reads it from the environment
+only and overrides competing variables for the child process only, never in
+your shell.
+
+## DeepSec
+
+[DeepSec](https://www.npmjs.com/package/deepsec) is an npm CLI wally does not
+bundle. Wally runs the release it was checked against (`2.3.10`): your `deepsec`
+on PATH if it reports exactly that version, otherwise `npx --yes deepsec@2.3.10`
+(same as Shannon). Bare `wally deepsec` is DeepSec `init` in
+the current directory: run it from a repo you own, not from `$HOME`. DeepSec
+still links a Vercel project (Sandbox identity) even when models go through
+your RunAnywhere account.
+
+What you need:
+
+- Node 18 or later (`npx`). Skip this if `deepsec` `2.3.10` is on your PATH.
+- A model on your account (`-m` or your default), from a signed-in account or
+  `WALLY_CLOUD_KEY`.
+
+```bash
+wally account login
+wally deepsec -- init . ./my-repo
+```
+
+With no DeepSec command after `--`, wally runs `init`. Other subcommands pass
+through unless they are `init`, `setup`, `process` or `revalidate`, which get
+the hosted route:
+
+```bash
+wally deepsec -- status
+wally deepsec -m glm-5.3-flash -- process
+```
+
+For those routed commands wally injects Pi-style flags ahead of yours:
+`--agent pi`, `--model runanywhere/<id>` (Pi requires `provider/model`), `--model-auth custom`, `--ai-provider runanywhere`,
+`--ai-base-url <console endpoint>`, `--ai-api-key-env WALLY_DEEPSEC_API_KEY`, and
+`--ai-credential-header authorization:bearer`. It writes `models.json` under the
+Wally profile and sets `PI_CODING_AGENT_DIR` plus `WALLY_DEEPSEC_API_KEY` for
+DeepSec's process, and removes `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`,
+`AI_GATEWAY_API_KEY` and `WALLY_CLOUD_KEY` from the child so nothing else can
+override your key. Passing your own copy of any of those flags (`--agent`,
+`--model`, `--model-auth`, `--ai-provider`, `--ai-base-url`, `--ai-api-key-env`,
+`--ai-credential-header`) on those commands is refused; choose the model with
+wally's `-m`.
+
+## VVAH
+
+[VVAH](https://github.com/visa/visa-vulnerability-agentic-harness) is a Python
+CLI wally does not bundle. Wally runs the release it was checked against
+(`1.5.1`). If `vvaharness` is missing, wally prints the install command, asks
+``Install it now with `…`? [y/N]``, and on yes creates a venv under the Wally
+profile (`<profile>/vvah/`) and pip-installs the `v1.5.1` tag.
+
+What you need:
+
+- Python 3.11–3.14 on PATH (`python3.12` is preferred; Homebrew's `python3` is
+  often 3.15, which VVAH cannot install on). Checked after you confirm install.
+- A model on your account (`-m` or your default), from a signed-in account or
+  `WALLY_CLOUD_KEY`.
+
+```bash
+wally account login
+wally vvah
+```
+
+With no VVAH command after `--`, wally runs `scan --repo . --remediate`. Run
+that from a project directory, not `$HOME` (the profile config lives under
+`~/.config/wally`, and VVAH refuses a `--config` inside the scan target). Other
+commands pass through:
+
+```bash
+wally vvah -- scan --repo ./my-repo
+wally vvah -m glm-5.3-flash -- scan --repo ./my-repo
+```
+
+Each run rewrites `<profile>/vvah/config.local.yaml` (owner-only, 0600 on macOS
+and Linux; on Windows it inherits the folder's permissions). If the profile
+directory is inside the scan target, wally stages the config in a folder under
+the system temp directory instead. Every active scanner role maps to your chosen
+model with `via: openai`; the file never contains the API key. The child gets
+`OPENAI_API_KEY` and `OPENAI_BASE_URL`, and wally removes `ANTHROPIC_API_KEY`,
+`ANTHROPIC_SDK_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and `WALLY_CLOUD_KEY` from it. VVAH's S10 stage can edit files on disk as part of a
+scan; run it only on trees you are allowed to change.
+
+If you confirm install and no supported Python (3.11–3.14, found as
+`python3.12`, `python3.11`, `python3.13`, `python3.14` or `python3`) is on PATH,
+wally prints `python 3.11 is not installed on this machine, Please install it first, Thank You`
+and exits. If `python3` is newer than 3.14 it prints
+`VVAH needs Python 3.11–3.14 (python3 is 3.15). Install Python 3.12, then run this again.`
+instead. The venv is left in place for the next run.

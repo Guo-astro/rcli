@@ -1,6 +1,7 @@
 //! Launching coding tools (Claude Code, Codex, opencode, Hermes, OpenClaw, DeepSeek,
-//! Prime Agent, Command Code)
-//! against a hosted or local model. One namespace, as C++ `wally::harness` was.
+//! Prime Agent, Command Code) against a hosted or local model, and the hosted
+//! security harnesses (Shannon, DeepSec, VVAH), which run only against hosted
+//! account models. One namespace, as C++ `wally::harness` was.
 
 pub mod agents;
 pub mod catalog_models;
@@ -9,12 +10,16 @@ pub mod claude_effort;
 pub mod codex;
 pub mod command_code;
 pub mod declared_harness;
+pub mod deepsec;
 #[allow(clippy::module_inception)]
 pub mod harness;
+pub mod hosted;
 pub mod image_gate;
 pub mod local_models;
 pub mod opencode;
 pub mod path_reload;
+pub mod shannon;
+pub mod vvah;
 
 pub use agents::*;
 pub use catalog_models::*;
