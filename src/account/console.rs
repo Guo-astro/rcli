@@ -296,6 +296,25 @@ pub struct CatalogPrice {
     pub decisions_only: bool,
 }
 
+/// Chat models `GET /v1/models` omitted that this account is still entitled
+/// to. The price catalog is per-account, so a gated id is here only when the
+/// account holds the grant. Decision-only rows are not chat models.
+pub fn gated_chat_ids(listed: &[String], prices: &[CatalogPrice]) -> Vec<String> {
+    let mut ids = Vec::new();
+    for price in prices {
+        let id = price.id.as_str();
+        if price.decisions_only
+            || id.is_empty()
+            || listed.iter().any(|listed_id| listed_id == id)
+            || ids.iter().any(|seen: &String| seen == id)
+        {
+            continue;
+        }
+        ids.push(price.id.clone());
+    }
+    ids
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct DecisionsResult {
     pub response: decisions::DecisionsResponse,
@@ -2266,6 +2285,33 @@ pub fn who_am_i(console_url: &str, token: &str) -> Result<Identity, String> {
 mod tests {
     use std::collections::HashMap;
     use std::time::Duration;
+
+    fn price(id: &str, decisions_only: bool) -> super::CatalogPrice {
+        super::CatalogPrice {
+            id: id.to_string(),
+            decisions_only,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn gated_chat_ids_are_entitled_catalog_rows_missing_from_the_model_list() {
+        let listed = vec!["deepseek-v4.1-flash-1017".to_string()];
+        let prices = vec![
+            price("deepseek-v4.1-flash-1017", false),
+            price("deepseek-v4.1-flash-1017-uncensored", false),
+            price("deepseek-v4.1-flash-1017-uncensored", false),
+            price("eve", true),
+            price("", false),
+        ];
+        assert_eq!(
+            super::gated_chat_ids(&listed, &prices),
+            vec!["deepseek-v4.1-flash-1017-uncensored".to_string()]
+        );
+        assert!(
+            super::gated_chat_ids(&listed, &[price("deepseek-v4.1-flash-1017", false)]).is_empty()
+        );
+    }
 
     #[test]
     fn console_tls_uses_the_platform_stack_and_trust_store() {

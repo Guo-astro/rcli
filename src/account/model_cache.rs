@@ -168,11 +168,33 @@ pub fn refresh_model_cache_now(credentials: &Credentials) -> Result<(), bool> {
         // Rate-limited or unreachable is a "try again", anything else a hard fail.
         return Err(result == super::IdentityResult::Unavailable);
     }
-    let ids: Vec<String> = models
+    let mut ids: Vec<String> = models
         .into_iter()
         .filter(|model| !model.id.is_empty())
         .map(|model| model.id)
         .collect();
+    // Gated chat models are entitled on the price catalog and absent from
+    // /v1/models. Same 3s bound as `models list`, so a hung catalog cannot
+    // stall a launch for the transport's full timeout.
+    const CATALOG_TIMEOUT_MS: i32 = 3_000;
+    match console.fetch_catalog_within(
+        &credentials.console_url,
+        &credentials.access_token,
+        CATALOG_TIMEOUT_MS,
+    ) {
+        (super::IdentityResult::Ok, prices, _) => {
+            ids.extend(super::gated_chat_ids(&ids, &prices));
+        }
+        // A failed catalog read must not drop grants the last good read
+        // cached. Ids that are not on the fresh public list are those grants.
+        _ => {
+            for cached in cached_model_ids() {
+                if !cached.is_empty() && !ids.iter().any(|id| id == &cached) {
+                    ids.push(cached);
+                }
+            }
+        }
+    }
     // A failed write must not report success: the caller (and the launch
     // path validating against the cache) would otherwise trust a catalog that
     // was never actually persisted, and reject a valid model against the
