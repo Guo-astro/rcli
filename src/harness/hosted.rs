@@ -123,8 +123,8 @@ pub fn hosted_access(console: &ConsoleClient, tool: &str) -> Option<Hosted> {
 
 pub fn not_available_message(model: &str) -> String {
     format!(
-        "'{model}' is not available on this account. If it needs approval, request access in \
-         the console."
+        "'{model}' is not available on this account. Request access at \
+         https://runwally.com/security/request"
     )
 }
 

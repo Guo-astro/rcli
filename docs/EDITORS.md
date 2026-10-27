@@ -411,8 +411,8 @@ account.
 
 Some models need approval before an account can use them. If a model is not on
 your account's list, wally says so. That can also mean a mistyped or nonexistent
-id: check the id against `GET /v1/models` first, and request access in the
-console only if the model is gated.
+id: check the id against `GET /v1/models` first, and request access at
+https://runwally.com/security/request only if the model is gated.
 
 ## Security tools
 

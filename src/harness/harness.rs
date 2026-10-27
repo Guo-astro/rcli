@@ -1063,13 +1063,13 @@ pub fn report_not_signed_in() {
     ));
 }
 
-/// What a person is told when a hosted model is not on their account's list:
-/// a model that needs approval is asked for in the console, so this never
-/// sends them to log in again.
+/// What a person is told when a hosted model is not on their account's list.
+/// A model that needs approval is requested on the form, so this never sends
+/// them to log in again.
 pub fn not_on_account_message(model: &str) -> String {
     format!(
-        "'{model}' is not on your account's model list. If it needs approval, request access \
-         in the console."
+        "'{model}' is not available on this account. Request access at \
+         https://runwally.com/security/request"
     )
 }
 
@@ -1489,8 +1489,8 @@ mod tests {
         let message = not_on_account_message("some-model");
         assert_eq!(
             message,
-            "'some-model' is not on your account's model list. If it needs approval, request \
-             access in the console."
+            "'some-model' is not available on this account. Request access at \
+             https://runwally.com/security/request"
         );
         assert!(!message.contains("log in") && !message.contains("login"));
     }

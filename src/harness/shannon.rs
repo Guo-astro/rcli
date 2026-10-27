@@ -90,8 +90,8 @@ then run this again.";
 /// What a person is told when `-m` names a model their account does not have.
 pub fn not_available_message(model: &str) -> String {
     format!(
-        "'{model}' is not available on this account. If it needs approval, request access in \
-         the console."
+        "'{model}' is not available on this account. Request access at \
+         https://runwally.com/security/request"
     )
 }
 
@@ -1141,8 +1141,8 @@ mod tests {
         let models = [model("glm-5.3-flash", 1, 1, false)];
         assert_eq!(
             choose_model(&models, Some("gated-model"), "glm-5.3-flash").unwrap_err(),
-            "'gated-model' is not available on this account. If it needs approval, request \
-             access in the console."
+            "'gated-model' is not available on this account. Request access at \
+             https://runwally.com/security/request"
         );
         assert_eq!(
             choose_model(&models, Some("glm-5.3-flash"), "x").unwrap(),
