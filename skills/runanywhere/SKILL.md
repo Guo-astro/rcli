@@ -130,9 +130,9 @@ harness; those surfaces refuse it and point back here.
 ## When something is wrong
 
 - **"not signed in"** — `wally account login`.
-- **"not available on this account" or "not on your account's model list"** —
-  that model may need approval. Check the model id first; if it is right and the
-  model is gated, request access in the console. Do not log in again.
+- **"not available on this account"** — that model may need approval. Check
+  the model id first; if it is right and the model is gated, request access at
+  https://runwally.com/security/request. Do not log in again.
 - **DeepSec or VVAH prerequisites missing** — install Node 18+ (DeepSec) or Python 3.11–3.14 (VVAH); see `docs/EDITORS.md`.
 - **"that key is not valid"** — the key was revoked or expired; `wally account login` again.
 - **opencode not installed** — `npm i -g opencode-ai`.
