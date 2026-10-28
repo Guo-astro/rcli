@@ -201,6 +201,23 @@ fn infer_local_kind(path: &str) -> (v1::InferenceFramework, v1::ModelFormat) {
             }
         }
     }
+    // An MLX checkpoint is a directory of safetensors plus config.json.
+    if let Ok(entries) = std::fs::read_dir(p) {
+        let mut saw_config = false;
+        let mut saw_weights = false;
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name == "config.json" {
+                saw_config = true;
+            }
+            if name.ends_with(".safetensors") {
+                saw_weights = true;
+            }
+        }
+        if saw_config && saw_weights {
+            return (v1::InferenceFramework::Mlx, v1::ModelFormat::Safetensors);
+        }
+    }
     // QHexRT HNPU bundles: Hexagon arch folder (v75/v79/v81), a context.bin, or
     // a top-level non-aux .json next to QNN binaries. `_HNPU` is the published
     // repo suffix; honor it so `wally run --engine qhexrt <dir>` is not required.

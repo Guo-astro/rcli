@@ -2864,14 +2864,6 @@ const D1_3B_GGUF_FILES: &[CatalogFile] = &[CatalogFile {
     checksum_sha256: Some("16aff27ea2eefdc32b9897f43854a5d3170c1dc8dccb9c756905af30a4e22402"),
 }];
 
-const D1_OMNI_GGUF_FILES: &[CatalogFile] = &[CatalogFile {
-    url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/main/gguf/d1-omni-600M-Q8_0.gguf",
-    filename: "d1-omni-600M-Q8_0.gguf",
-    required: true,
-    size_bytes: 407207584,
-    checksum_sha256: Some("cd94463f4cac9c700ec6750df8df005bb6846de410e159d1f5e985e1171693d3"),
-}];
-
 const GLINER_DECIDE_GGUF_FILES: &[CatalogFile] = &[CatalogFile {
     url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/main/gguf/gliner2.5-decide-q4_k_m.gguf",
     filename: "gliner2.5-decide-q4_k_m.gguf",
@@ -2922,37 +2914,6 @@ const D1_3B_MLX_FILES: &[CatalogFile] = &[
         required: false,
         size_bytes: 5436,
         checksum_sha256: Some("86f4770449a4797c9b4212d110b0cc70fb993c1ce960095bcfb12eea22f61cca"),
-    },
-];
-
-const D1_OMNI_MLX_FILES: &[CatalogFile] = &[
-    CatalogFile {
-        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/main/mlx/lfm-d1-omni-600m/config.json",
-        filename: "config.json",
-        required: true,
-        size_bytes: 1922,
-        checksum_sha256: Some("0b985b0c881d2297b25fab09bc805617d0b3a82ed699045da3e1634c3ea06a0a"),
-    },
-    CatalogFile {
-        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/main/mlx/lfm-d1-omni-600m/model.safetensors",
-        filename: "model.safetensors",
-        required: true,
-        size_bytes: 1174449298,
-        checksum_sha256: Some("22fcd4a2b582ccba956ae78a47ffc69ee65df7602e74101a73e83e3569438e7a"),
-    },
-    CatalogFile {
-        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/main/mlx/lfm-d1-omni-600m/tokenizer.json",
-        filename: "tokenizer.json",
-        required: true,
-        size_bytes: 4733371,
-        checksum_sha256: Some("1efc3a6609abf6b63b1f47188d139f3b59973a6a434dffe970a7261a51ed2711"),
-    },
-    CatalogFile {
-        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/main/mlx/lfm-d1-omni-600m/tokenizer_config.json",
-        filename: "tokenizer_config.json",
-        required: true,
-        size_bytes: 259,
-        checksum_sha256: Some("03efc74b752b899b6292ff7e607738be59e6f206fec9aca32bbc05e9184090fc"),
     },
 ];
 
@@ -3085,6 +3046,65 @@ const FLINT_GGUF_FILES: &[CatalogFile] = &[CatalogFile {
     size_bytes: 25054688704,
     checksum_sha256: Some("63c2ecc461ca545134b670c660e76fa20f47240f8d39b6510bfd21c4dd6e072f"),
 }];
+
+const LFM3_OMNI_MLX_FILES: &[CatalogFile] = &[
+    CatalogFile {
+        url: "https://huggingface.co/LiquidAI/LFM3-Omni-2B-MLX-4bit/resolve/main/config.json",
+        filename: "config.json",
+        required: true,
+        size_bytes: 13419,
+        checksum_sha256: None,
+    },
+    CatalogFile {
+        url: "https://huggingface.co/LiquidAI/LFM3-Omni-2B-MLX-4bit/resolve/main/processor_config.json",
+        filename: "processor_config.json",
+        required: true,
+        size_bytes: 2089,
+        checksum_sha256: None,
+    },
+    CatalogFile {
+        url: "https://huggingface.co/LiquidAI/LFM3-Omni-2B-MLX-4bit/resolve/main/model.safetensors",
+        filename: "model.safetensors",
+        required: true,
+        size_bytes: 1963416258,
+        checksum_sha256: None,
+    },
+    CatalogFile {
+        url: "https://huggingface.co/LiquidAI/LFM3-Omni-2B-MLX-4bit/resolve/main/model.safetensors.index.json",
+        filename: "model.safetensors.index.json",
+        required: true,
+        size_bytes: 80412,
+        checksum_sha256: None,
+    },
+    CatalogFile {
+        url: "https://huggingface.co/LiquidAI/LFM3-Omni-2B-MLX-4bit/resolve/main/tokenizer.json",
+        filename: "tokenizer.json",
+        required: true,
+        size_bytes: 17908634,
+        checksum_sha256: None,
+    },
+    CatalogFile {
+        url: "https://huggingface.co/LiquidAI/LFM3-Omni-2B-MLX-4bit/resolve/main/tokenizer_config.json",
+        filename: "tokenizer_config.json",
+        required: true,
+        size_bytes: 674,
+        checksum_sha256: None,
+    },
+    CatalogFile {
+        url: "https://huggingface.co/LiquidAI/LFM3-Omni-2B-MLX-4bit/resolve/main/chat_template.jinja",
+        filename: "chat_template.jinja",
+        required: true,
+        size_bytes: 13513,
+        checksum_sha256: None,
+    },
+    CatalogFile {
+        url: "https://huggingface.co/LiquidAI/LFM3-Omni-2B-MLX-4bit/resolve/main/generation_config.json",
+        filename: "generation_config.json",
+        required: true,
+        size_bytes: 392,
+        checksum_sha256: None,
+    },
+];
 
 const CATALOG: &[CatalogEntry] = &[
     // --- LLM (LlamaCpp / GGUF) ---
@@ -3356,6 +3376,40 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
+    },
+    CatalogEntry {
+        id: "lfm3-omni-2b",
+        alias: Some("lfm3-omni"),
+        name: "LiquidAI LFM3 Omni 2B",
+        category: v1::ModelCategory::Language,
+        framework: v1::InferenceFramework::LlamaCpp,
+        format: v1::ModelFormat::Gguf,
+        url: Some("https://huggingface.co/LiquidAI/LFM3-Omni-2B-GGUF/resolve/main/LFM3-Omni-2B-Q4_K_M.gguf"),
+        files: &[],
+        download_size_bytes: 1099630080,
+        context_length: 128000,
+        supports_thinking: false,
+        memory_required_bytes: 0,
+        cua_profile: "",
+        merge_key: Some("lfm3-omni-2b"),
+        harness_compatible: false,
+    },
+    CatalogEntry {
+        id: "mlx-lfm3-omni-2b",
+        alias: Some("lfm3-omni-mlx"),
+        name: "LiquidAI LFM3 Omni 2B",
+        category: v1::ModelCategory::Language,
+        framework: v1::InferenceFramework::Mlx,
+        format: v1::ModelFormat::Safetensors,
+        url: None,
+        files: LFM3_OMNI_MLX_FILES,
+        download_size_bytes: 1981435391,
+        context_length: 128000,
+        supports_thinking: false,
+        memory_required_bytes: 0,
+        cua_profile: "",
+        merge_key: Some("lfm3-omni-2b"),
         harness_compatible: false,
     },
     // SmolLM2 135M from the llama.cpp org's own GGUF (official), ≤4-bit.
@@ -5195,40 +5249,6 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("lfm-d1-3b"),
-        harness_compatible: false,
-    },
-    CatalogEntry {
-        id: "lfm-d1-omni-600m",
-        alias: Some("lfm-d1-omni-600m-gguf"),
-        name: "LFM D1 Omni 600M",
-        category: v1::ModelCategory::Decision,
-        framework: v1::InferenceFramework::LlamaCpp,
-        format: v1::ModelFormat::Gguf,
-        url: None,
-        files: D1_OMNI_GGUF_FILES,
-        download_size_bytes: 407207584,
-        context_length: 0,
-        supports_thinking: false,
-        memory_required_bytes: 0,
-        cua_profile: "",
-        merge_key: Some("lfm-d1-omni-600m"),
-        harness_compatible: false,
-    },
-    CatalogEntry {
-        id: "mlx-lfm-d1-omni-600m",
-        alias: Some("lfm-d1-omni-600m-mlx"),
-        name: "LFM D1 Omni 600M",
-        category: v1::ModelCategory::Decision,
-        framework: v1::InferenceFramework::Mlx,
-        format: v1::ModelFormat::Safetensors,
-        url: None,
-        files: D1_OMNI_MLX_FILES,
-        download_size_bytes: 1179184850,
-        context_length: 0,
-        supports_thinking: false,
-        memory_required_bytes: 0,
-        cua_profile: "",
-        merge_key: Some("lfm-d1-omni-600m"),
         harness_compatible: false,
     },
     CatalogEntry {
