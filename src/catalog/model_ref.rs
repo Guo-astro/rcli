@@ -490,7 +490,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn safetensors_dir_stays_unspecified_unless_it_is_lfm3_mlx() {
         let dir = tempfile::tempdir().expect("temp dir");
         let bundle = dir.path();
@@ -518,6 +517,7 @@ mod tests {
         assert_eq!(format, v1::ModelFormat::QnnContext);
     }
 
+    #[test]
     fn cpp_style_filename_is_empty_on_trailing_separator() {
         assert_eq!(cpp_style_filename("/a/b/HNPU/"), "");
         assert_eq!(cpp_style_filename("/a/b/HNPU"), "HNPU");
