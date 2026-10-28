@@ -7,7 +7,7 @@
 
 [product]
 # wally's own release version; git tag is v<version> (auto-tag.yml reads it here).
-version = "0.8.17"
+version = "0.8.18"
 
 [contracts]
 # Vendored from InferenceInfra at this exact revision.
@@ -16,16 +16,16 @@ decisions_contract_sha256 = "2201716c3f8f1ac4e5e70046a33939a631aacd503fa7a7a7539
 
 [sdk]
 # The published C++ desktop kit this tree builds against; bump the SHAs with it.
-kit_version = "0.20.42"
-kit_release_tag = "cpp-desktop-v0.20.42"
+kit_version = "0.20.43"
+kit_release_tag = "cpp-desktop-v0.20.43"
 idl_version = "1.6.1"
 idl_schema_sha256 = "688706bfa5ac286fd28ed5f21a1dca1a1fa0ff0e0d5a8f6d4cffc313b9e46d0a"
 idl_protoc_version = "35.1"
-kit_sha256_macos_arm64 = "c7cd55d1a61f4eea34534e91b07485991de385415b2bf187dcde410d4f97d0b4"
-kit_sha256_windows_x64 = "95e18ca2292c05033e58f8e93ea2ec4fa33ea51414dd0898691a2968e7263470"
-kit_sha256_windows_arm64 = "e61131abcf5f683e8ee45b48570de9f9d019796317404a22216309317c38e0ca"
-kit_sha256_linux_x64 = "2c22b0f76ccfdd971ea96e732337b03a473281d654723e29fda5fb556f5daa11"
-kit_sha256_linux_arm64 = "98e4b4f43fb6e54363217c0960b877b667dcf08284485e4ae5caa04d09bcd422"
+kit_sha256_macos_arm64 = "2f97a27dbec2207e0b4f891f026a45dd4fce174871a29225c3350f7a07864a79"
+kit_sha256_windows_x64 = "f0d3d5ddff06a4afd6c4f168f351fd23445afbd9fb89021fb788b0cbb2fb9d93"
+kit_sha256_windows_arm64 = "6d392a5ba5cce2682be71451ac37cf48f4a3fad52530472f37c64a1fb0f053f8"
+kit_sha256_linux_x64 = "c5c6029feef8f5cc1f867e8ca6bca035ddcd28fe9ad3e2bd86365f014c68e111"
+kit_sha256_linux_arm64 = "8f26773884c84bd0e041f215fc3206381931e549ac3f125a8a1c4bba2271847f"
 
 [swift]
 # The Apple MLX host's Swift SDK: sdk_package_version pins swift/Package.swift,
@@ -33,14 +33,15 @@ kit_sha256_linux_arm64 = "98e4b4f43fb6e54363217c0960b877b667dcf08284485e4ae5caa0
 # used by ci.yml/release.yml. Both move on their own cadence, distinct from the
 # C++ kit above.
 #
-# sdk_ci_ref is the cpp-desktop-v0.20.42 source commit
-# (siddhesh/cpp-desktop-kit-0.20.42), not a tag name: release tags on
+# sdk_ci_ref is the cpp-desktop-v0.20.43 source commit
+# (siddhesh/mlx-local-headers), not a tag name: release tags on
 # that repo are not protected or immutable, and this checkout supplies the
 # Swift code compiled into the Apple bottle, so a retargeted tag would change
 # what ships. The SHA is what the tag resolved to when this pin was made.
+# ff824676 refreshes the Apple XCFramework checksums for the zips on v0.20.37.
 sdk_package_version = "0.20.37"
 tools_version = "6.0"
-sdk_ci_ref = "fa3b7a46ce57c946cccdb31c48e388e1004a6238"
+sdk_ci_ref = "ff824676b8175c048bd9256012ddff2f592fbffd"
 
 [toolchain]
 # CMake's own floor; CMakeLists.txt declares these and check-versions holds it here.

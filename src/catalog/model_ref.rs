@@ -242,6 +242,26 @@ fn infer_local_kind(path: &str) -> (v1::InferenceFramework, v1::ModelFormat) {
     if looks_qnn() {
         framework = v1::InferenceFramework::Qhexrt;
         format = v1::ModelFormat::QnnContext;
+        return (framework, format);
+    }
+    // A safetensors directory is not MLX by itself: the same layout is a normal
+    // Hugging Face checkpoint, and guessing MLX forces that loader. Only the
+    // LFM3 text/decision types that have no other directory loader are MLX.
+    if let Ok(config) = std::fs::read_to_string(p.join("config.json")) {
+        let mlx_type = ["\"lfm3_omni\"", "\"lfm3_vl\"", "\"lfm3\""]
+            .iter()
+            .any(|marker| config.contains(marker));
+        let weights = std::fs::read_dir(p).ok().is_some_and(|entries| {
+            entries.flatten().any(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .ends_with(".safetensors")
+            })
+        });
+        if mlx_type && weights {
+            return (v1::InferenceFramework::Mlx, v1::ModelFormat::Safetensors);
+        }
     }
     (framework, format)
 }
@@ -467,6 +487,34 @@ mod tests {
         let (framework, format) = infer_local_kind(&with_slash);
         assert_eq!(framework, v1::InferenceFramework::Unspecified);
         assert_eq!(format, v1::ModelFormat::Unspecified);
+    }
+
+    #[test]
+    fn safetensors_dir_stays_unspecified_unless_it_is_lfm3_mlx() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let bundle = dir.path();
+        std::fs::write(bundle.join("config.json"), br#"{"model_type":"qwen3"}"#).unwrap();
+        std::fs::write(bundle.join("model.safetensors"), b"weights").unwrap();
+        let (framework, format) = infer_local_kind(bundle.to_str().unwrap());
+        assert_eq!(framework, v1::InferenceFramework::Unspecified);
+        assert_eq!(format, v1::ModelFormat::Unspecified);
+
+        std::fs::write(bundle.join("config.json"), br#"{"model_type":"lfm3_omni"}"#).unwrap();
+        let (framework, format) = infer_local_kind(bundle.to_str().unwrap());
+        assert_eq!(framework, v1::InferenceFramework::Mlx);
+        assert_eq!(format, v1::ModelFormat::Safetensors);
+    }
+
+    #[test]
+    fn qhexrt_markers_win_over_safetensors() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let bundle = dir.path();
+        std::fs::write(bundle.join("config.json"), br#"{"model_type":"lfm3_omni"}"#).unwrap();
+        std::fs::write(bundle.join("model.safetensors"), b"weights").unwrap();
+        std::fs::write(bundle.join("context.bin"), b"qnn").unwrap();
+        let (framework, format) = infer_local_kind(bundle.to_str().unwrap());
+        assert_eq!(framework, v1::InferenceFramework::Qhexrt);
+        assert_eq!(format, v1::ModelFormat::QnnContext);
     }
 
     #[test]

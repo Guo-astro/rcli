@@ -22,11 +22,11 @@ granite-4.1-8b            llm         mlx/llama.cpp    5.0 GB      no
 granite-4.2-30b           llm         llama.cpp        16.8 GB     no            
 granite-4.2-8b            llm         llama.cpp        5.2 GB      no            
 lfm-d1-3b                 decision    mlx/llama.cpp    1.6 GB      no            
-lfm-d1-omni-600m          decision    mlx/llama.cpp    388.3 MB    no            
 lfm2.5-1.2b               llm         llama.cpp        697.0 MB    no            
 lfm2.5-2.6b               llm         llama.cpp        1.6 GB      no            
 lfm2.5-230m               llm         llama.cpp        146.3 MB    no            
 lfm2.5-350m               llm         llama.cpp        219.0 MB    no            
+lfm3-omni-2b              llm         mlx/llama.cpp    1.0 GB      no            
 llama-3.2-3b              llm         llama.cpp        2.0 GB      no            
 maple-preview             llm         mlx/llama.cpp    4.6 GB      no            
 nemotron-nano             llm         mlx              4.2 GB      no            
